@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, TypedDict
 
-from pyseekdb.client.embedding_function import DefaultEmbeddingFunction, EmbeddingFunction
+from pyseekdb.client.embedding_function import EmbeddingFunction
 from pyseekdb.client.sparse_embedding_function import SparseEmbeddingFunction
 from pyseekdb.client.types import _NOT_PROVIDED, K
 
@@ -322,8 +322,6 @@ class VectorIndexConfig:
     embedding_function: EmbeddingFunction | None = _NOT_PROVIDED
 
     def __post_init__(self):
-        if self.embedding_function is _NOT_PROVIDED:
-            self.embedding_function = DefaultEmbeddingFunction()
         if self.hnsw is not None:
             self.hnsw.__post_init__()
 

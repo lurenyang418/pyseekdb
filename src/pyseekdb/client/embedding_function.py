@@ -5,15 +5,13 @@ This module provides the EmbeddingFunction protocol and default implementations
 for converting text documents to vector embeddings.
 """
 
+import importlib
 import logging
-import sys
-import warnings
 from abc import abstractmethod
 from typing import (
     Any,
     ClassVar,
     Protocol,
-    Self,
     TypeVar,
     runtime_checkable,
 )
@@ -128,100 +126,29 @@ def dimension_of(embedding_function: EmbeddingFunction[D]) -> int:
             raise ValueError("Embedding function returned empty result when called with 'seekdb'")
 
 
-class DefaultEmbeddingFunction(EmbeddingFunction[Documents]):
-    """
-    Default embedding function using ONNX runtime.
-
-    Uses the 'all-MiniLM-L6-v2' model via ONNX, which produces 384-dimensional embeddings.
-    This is a lightweight, fast model suitable for general-purpose text embeddings.
-
-    Example:
-        >>> ef = DefaultEmbeddingFunction()
-        >>> embeddings = ef(["Hello world", "How are you?"])
-        >>> print(len(embeddings[0]))  # 384
-    """
-
-    _MODEL_NAME = "all-MiniLM-L6-v2"
-    _HF_MODEL_ID = "sentence-transformers/all-MiniLM-L6-v2"  # Hugging Face model ID
-    _DIMENSION = 384  # all-MiniLM-L6-v2 produces 384-dimensional embeddings
-
-    def __init__(
-        self,
-        model_name: str = "all-MiniLM-L6-v2",
-        preferred_providers: list[str] | None = None,
-    ):
-        """
-        Initialize the default embedding function.
-
-        Args:
-            model_name: str = "all-MiniLM-L6-v2",  # Deprecated. Will be removed in a future version.
-            preferred_providers: list[str] | None = None,  # Deprecated. Will be removed in a future version.
-                                # The preferred ONNX runtime providers. Defaults to None (uses available providers).
-        """
-        if model_name != self._MODEL_NAME:
-            raise ValueError(f"Currently only '{self._MODEL_NAME}' is supported, got '{model_name}'")
-        if preferred_providers:
-            warnings.warn(
-                "preferred_providers is deprecated and will be removed in a future version. "
-                "Use the preferred_providers argument of OnnxEmbeddingFunction instead.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-        self.model_name = self._MODEL_NAME
-        if sys.version_info >= (3, 14):
-            from pyseekdb.utils.embedding_functions.sentence_transformer_embedding_function import (
-                SentenceTransformerEmbeddingFunction,
-            )
-
-            self._backend = SentenceTransformerEmbeddingFunction(model_name=self._MODEL_NAME)
-        else:
-            from pyseekdb.utils.embedding_functions import OnnxEmbeddingFunction
-
-            self._backend = OnnxEmbeddingFunction(
-                model_name=self._MODEL_NAME,
-                hf_model_id=self._HF_MODEL_ID,
-                dimension=self._DIMENSION,
-                preferred_providers=preferred_providers,
-            )
-
-    @property
-    def dimension(self) -> int:
-        """Get the dimension of embeddings produced by this function."""
-        return self._DIMENSION
-
-    def __call__(self, documents: Documents) -> Embeddings:
-        return self._backend(documents)
-
-    @staticmethod
-    def name() -> str:
-        return "default"
-
-    def get_config(self) -> dict[str, Any]:
-        return {}
-
-    @staticmethod
-    def build_from_config(_config: dict[str, Any]) -> Self:
-        return DefaultEmbeddingFunction()
-
-    def __repr__(self) -> str:
-        return f"DefaultEmbeddingFunction(model_name='{self.model_name}')"
-
-
-# Global default embedding function instance
-_default_embedding_function: DefaultEmbeddingFunction | None = None
-
-
-def get_default_embedding_function() -> DefaultEmbeddingFunction:
+def get_default_embedding_function():
     """
     Get or create the default embedding function instance.
 
+    The DefaultEmbeddingFunction is an optional feature. Requires the
+    ``default-embedding`` extra to be installed: ``pip install pyseekdb[default-embedding]``
+
     Returns:
         DefaultEmbeddingFunction instance
+
+    Raises:
+        ImportError: If pyseekdb[default-embedding] is not installed.
     """
-    global _default_embedding_function
-    if _default_embedding_function is None:
-        _default_embedding_function = DefaultEmbeddingFunction()
-    return _default_embedding_function
+    try:
+        from pyseekdb.utils.embedding_functions.default_embedding_function import (
+            get_default_embedding_function as _impl,
+        )
+        return _impl()
+    except (ImportError, ValueError) as e:
+        raise ImportError(
+            "DefaultEmbeddingFunction is not available. "
+            "Install it with: pip install pyseekdb[default-embedding]"
+        ) from e
 
 
 class EmbeddingFunctionRegistry:
@@ -309,45 +236,39 @@ class EmbeddingFunctionRegistry:
         if cls._initialized:
             return
 
-        # Register DefaultEmbeddingFunction
-        cls._registry["default"] = DefaultEmbeddingFunction
-
-        # Try to register optional embedding functions (may not be installed)
+        # Try to register DefaultEmbeddingFunction (may not be installed)
         try:
-            from pyseekdb.utils.embedding_functions import (
-                AmazonBedrockEmbeddingFunction,
-                CohereEmbeddingFunction,
-                GoogleVertexEmbeddingFunction,
-                JinaEmbeddingFunction,
-                MistralEmbeddingFunction,
-                MorphEmbeddingFunction,
-                OllamaEmbeddingFunction,
-                OpenAIEmbeddingFunction,
-                QwenEmbeddingFunction,
-                SentenceTransformerEmbeddingFunction,
-                SiliconflowEmbeddingFunction,
-                TencentHunyuanEmbeddingFunction,
-                Text2VecEmbeddingFunction,
-                VoyageaiEmbeddingFunction,
+            from pyseekdb.utils.embedding_functions.default_embedding_function import (
+                DefaultEmbeddingFunction,
             )
 
-            cls._registry["sentence_transformer"] = SentenceTransformerEmbeddingFunction
-            cls._registry["openai"] = OpenAIEmbeddingFunction
-            cls._registry["qwen"] = QwenEmbeddingFunction
-            cls._registry["mistral"] = MistralEmbeddingFunction
-            cls._registry["morph"] = MorphEmbeddingFunction
-            cls._registry["siliconflow"] = SiliconflowEmbeddingFunction
-            cls._registry["tencent_hunyuan"] = TencentHunyuanEmbeddingFunction
-            cls._registry["text2vec"] = Text2VecEmbeddingFunction
-            cls._registry["ollama"] = OllamaEmbeddingFunction
-            cls._registry["voyageai"] = VoyageaiEmbeddingFunction
-            cls._registry["google_vertex"] = GoogleVertexEmbeddingFunction
-            cls._registry["cohere"] = CohereEmbeddingFunction
-            cls._registry["jina"] = JinaEmbeddingFunction
-            cls._registry["amazon_bedrock"] = AmazonBedrockEmbeddingFunction
-        except ImportError as e:
-            # Optional dependencies not installed, skip registration
-            logger.warning(f"Failed to register some embedding function classes: {e}")
+            cls._registry["default"] = DefaultEmbeddingFunction
+        except ImportError:
+            pass
+
+        # Try to register optional embedding functions (each individually)
+        _optional_efs: list[tuple[str, str, str]] = [
+            ("sentence_transformer", "sentence_transformer_embedding_function", "SentenceTransformerEmbeddingFunction"),
+            ("openai", "openai_embedding_function", "OpenAIEmbeddingFunction"),
+            ("qwen", "qwen_embedding_function", "QwenEmbeddingFunction"),
+            ("mistral", "mistral_embedding_function", "MistralEmbeddingFunction"),
+            ("morph", "morph_embedding_function", "MorphEmbeddingFunction"),
+            ("siliconflow", "siliconflow_embedding_function", "SiliconflowEmbeddingFunction"),
+            ("tencent_hunyuan", "tencent_hunyuan_embedding_function", "TencentHunyuanEmbeddingFunction"),
+            ("text2vec", "text2vec_embedding_function", "Text2VecEmbeddingFunction"),
+            ("ollama", "ollama_embedding_function", "OllamaEmbeddingFunction"),
+            ("voyageai", "voyageai_embedding_function", "VoyageaiEmbeddingFunction"),
+            ("google_vertex", "google_vertex_embedding_function", "GoogleVertexEmbeddingFunction"),
+            ("cohere", "cohere_embedding_function", "CohereEmbeddingFunction"),
+            ("jina", "jina_embedding_function", "JinaEmbeddingFunction"),
+            ("amazon_bedrock", "amazon_bedrock_embedding_function", "AmazonBedrockEmbeddingFunction"),
+        ]
+        for name, module_name, class_name in _optional_efs:
+            try:
+                module = importlib.import_module(f"pyseekdb.utils.embedding_functions.{module_name}")
+                cls._registry[name] = getattr(module, class_name)
+            except ImportError:
+                pass
 
         cls._initialized = True
 

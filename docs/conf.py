@@ -48,7 +48,7 @@ autodoc_mock_imports = [
     "tokenizers",
     "httpx",
     "tqdm",
-    "tenacity",
+
     "numpy",
 ]
 

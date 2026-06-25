@@ -811,6 +811,8 @@ class BaseClient(BaseConnection, AdminAPI):
         # Resolve HNSW configuration dimension if not set
         hnsw_config = schema.vector_index.hnsw
         dense_embedding_function = schema.vector_index.embedding_function
+        if dense_embedding_function is _NOT_PROVIDED:
+            dense_embedding_function = get_default_embedding_function()
         if hnsw_config is None:
             # Determine dimension from embedding function
             actual_dimension = self._get_embedding_function_dimension(dense_embedding_function)

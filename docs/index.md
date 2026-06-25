@@ -21,6 +21,12 @@ pip install -U pyseekdb
 uv add pyseekdb
 ```
 
+For embedded mode (local seekdb engine), install with the `embedded` extras:
+
+```bash
+pip install -U pyseekdb[embedded]
+```
+
 ## Quick Start
 
 Embedded Mode

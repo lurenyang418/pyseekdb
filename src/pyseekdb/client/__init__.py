@@ -39,7 +39,6 @@ from .configuration import (
 )
 from .database import Database
 from .embedding_function import (
-    DefaultEmbeddingFunction,
     EmbeddingFunction,
     get_default_embedding_function,
     register_embedding_function,
@@ -133,21 +132,28 @@ def _create_server_client(
 
     raise ValueError(
         "Default embedded mode is not available because pylibseekdb could not be imported. "
-        "Please provide host/port parameters to use RemoteServerClient."
+        "Install it with: pip install pyseekdb[embedded]\n"
+        "Or provide host/port parameters to use RemoteServerClient."
     )
 
 
 def __getattr__(name: str) -> Any:
     """
-    Lazily expose optional embedded client symbols.
+    Lazily expose optional client symbols.
 
-    This avoids importing pylibseekdb during `import pyseekdb`, which can crash
-    on unsupported interpreter/platform combinations (e.g. some Python 3.14 CI environments).
+    This avoids importing pylibseekdb and heavy embedding dependencies
+    during ``import pyseekdb``.
     """
     if name == "SeekdbEmbeddedClient":
         from .client_seekdb_embedded import SeekdbEmbeddedClient
 
         return SeekdbEmbeddedClient
+    if name == "DefaultEmbeddingFunction":
+        from pyseekdb.utils.embedding_functions.default_embedding_function import (
+            DefaultEmbeddingFunction,
+        )
+
+        return DefaultEmbeddingFunction
     raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
 
 

@@ -46,7 +46,8 @@ class SeekdbEmbeddedClient(BaseClient):
         if not _PYLIBSEEKDB_AVAILABLE or seekdb is None:
             raise RuntimeError(
                 "Embedded Client is not available because pylibseekdb is not available. "
-                "Please install pylibseekdb (Linux only) or use RemoteServerClient (host/port) instead."
+                "Install it with: pip install pyseekdb[embedded]\n"
+                "Or use RemoteServerClient (host/port) instead."
             )
 
         self.path = os.path.abspath(path)

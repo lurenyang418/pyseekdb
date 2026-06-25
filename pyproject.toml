@@ -11,14 +11,32 @@ classifiers = [
 ]
 dependencies = [
     "pymysql>=1.1.1",
+]
+
+[project.optional-dependencies]
+embedded = [
     "pylibseekdb; sys_platform == \"linux\" or (sys_platform == \"darwin\" and platform_machine == \"arm64\")",
+]
+default-embedding = [
     "onnxruntime>=1.19.0; python_version < \"3.14\"",
     "tokenizers>=0.15.0; python_version < \"3.14\"",
     "httpx; python_version < \"3.14\"",
     "tqdm; python_version < \"3.14\"",
     "sentence-transformers; python_version >= \"3.14\"",
-    "tenacity",
     "numpy>=1.26,!=2.4.0",
+]
+all-embeddings = [
+    "pyseekdb[default-embedding]",
+    "openai",
+    "boto3",
+    "cohere",
+    "voyageai",
+    "jina",
+    "mistralai",
+    "litellm",
+    "google-cloud-aiplatform",
+    "bm25s[full]",
+    "huggingface-hub>=0.26",
 ]
 
 [project.urls]

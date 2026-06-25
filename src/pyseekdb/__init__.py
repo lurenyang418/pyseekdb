@@ -80,7 +80,6 @@ from .client import (
     ClientAPI,
     Configuration,
     Database,
-    DefaultEmbeddingFunction,
     EmbeddingFunction,
     FulltextIndexConfig,
     HNSWConfiguration,
@@ -144,3 +143,14 @@ __all__ = [
     "register_embedding_function",
     "register_sparse_embedding_function",
 ]
+
+
+def __getattr__(name: str) -> object:
+    """
+    Lazily expose optional symbols to avoid importing heavy dependencies eagerly.
+    """
+    if name == "DefaultEmbeddingFunction":
+        from pyseekdb.client import DefaultEmbeddingFunction
+
+        return DefaultEmbeddingFunction
+    raise AttributeError(f"module 'pyseekdb' has no attribute '{name}'")

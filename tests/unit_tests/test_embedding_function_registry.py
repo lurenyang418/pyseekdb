@@ -7,12 +7,14 @@ from typing import Any
 import pytest
 
 from pyseekdb.client.embedding_function import (
-    DefaultEmbeddingFunction,
     Documents,
     EmbeddingFunction,
     EmbeddingFunctionRegistry,
     Embeddings,
     register_embedding_function,
+)
+from pyseekdb.utils.embedding_functions.default_embedding_function import (
+    DefaultEmbeddingFunction,
 )
 
 

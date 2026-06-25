@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from pyseekdb.client.embedding_function import DefaultEmbeddingFunction
+from pyseekdb.utils.embedding_functions.default_embedding_function import DefaultEmbeddingFunction
 
 
 class TestDefaultEmbeddingFunctionPersistence:
