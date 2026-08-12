@@ -101,7 +101,7 @@ results = collection.query(
 - `n_results` (int, required): Number of similar results to return (default: 10)
 - `where` (dict, optional): Metadata filter conditions (see Filter Operators section)
 - `where_document` (dict, optional): Document content filter
-- `include` (List[str], optional): List of fields to include: `["documents", "metadatas", "embeddings"]`
+- `include` (List[str], optional): List of fields to include: `["documents", "metadatas", "embeddings", "distances"]` (singular aliases accepted). Invalid field names raise `ValueError` before the query runs.
 
 **Returns:**
 Dict with keys (chromadb-compatible format):
@@ -288,7 +288,8 @@ results = collection.hybrid_search(
 ### Document Filters (`where_document` parameter)
 - `$contains`: full-text match
 - `$not_contains`: exclude matches
-- `$or` / `$and` combining multiple `$contains` clauses
+- `$regex`: regular expression match (namespace `query` applies via SDK post-filter when OB knn filter cannot enforce it)
+- `$or` / `$and` combining multiple document clauses (including nested combinations)
 
 ## 5.5 Collection Information Methods
 

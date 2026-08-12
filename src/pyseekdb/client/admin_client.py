@@ -157,6 +157,7 @@ class _AdminClientProxy(AdminAPI):
         return self._server.fork_database(source_name=source_name, destination_name=destination_name, tenant=tenant)
 
     def __repr__(self):
+        """Return the developer-readable representation."""
         return f"<AdminClient server={self._server}>"
 
     def __enter__(self):
@@ -194,6 +195,7 @@ class _ClientProxy:
         schema: SchemaParam = None,
         configuration: ConfigurationParam = _NOT_PROVIDED,
         embedding_function: EmbeddingFunctionParam = _NOT_PROVIDED,
+        use_namespace: bool = False,
         **kwargs,
     ) -> "Collection":
         """Proxy to server implementation - collection operations only"""
@@ -202,6 +204,7 @@ class _ClientProxy:
             schema=schema,
             configuration=configuration,
             embedding_function=embedding_function,
+            use_namespace=use_namespace,
             **kwargs,
         )
 
@@ -227,6 +230,7 @@ class _ClientProxy:
         schema: SchemaParam = None,
         configuration: ConfigurationParam = _NOT_PROVIDED,
         embedding_function: EmbeddingFunctionParam = _NOT_PROVIDED,
+        use_namespace: bool = False,
         **kwargs,
     ) -> "Collection":
         """Proxy to server implementation - collection operations only"""
@@ -235,6 +239,7 @@ class _ClientProxy:
             schema=schema,
             configuration=configuration,
             embedding_function=embedding_function,
+            use_namespace=use_namespace,
             **kwargs,
         )
 
@@ -243,6 +248,7 @@ class _ClientProxy:
         return self._server.count_collection()
 
     def __repr__(self):
+        """Return the developer-readable representation."""
         return f"<Client server={self._server}>"
 
     def __enter__(self):

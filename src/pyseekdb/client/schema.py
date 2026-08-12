@@ -26,7 +26,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from .configuration import FulltextIndexConfig, HNSWConfiguration, SparseVectorIndexConfig, VectorIndexConfig
+from .configuration import (
+    FulltextIndexConfig,
+    HNSWConfiguration,
+    IVFConfiguration,
+    SparseVectorIndexConfig,
+    VectorIndexConfig,
+)
 
 
 class Schema:
@@ -84,21 +90,24 @@ class Schema:
 
     def __init__(
         self,
-        vector_index: VectorIndexConfig | HNSWConfiguration | None = None,
+        vector_index: VectorIndexConfig | HNSWConfiguration | IVFConfiguration | None = None,
         sparse_vector_index: SparseVectorIndexConfig | None = None,
         fulltext_index: FulltextIndexConfig | None = None,
     ):
+        """Init."""
         if isinstance(vector_index, VectorIndexConfig):
             self.vector_index = vector_index
         elif isinstance(vector_index, HNSWConfiguration):
             self.vector_index = VectorIndexConfig(hnsw=vector_index)
+        elif isinstance(vector_index, IVFConfiguration):
+            self.vector_index = VectorIndexConfig(ivf=vector_index)
         elif vector_index is None:
             # Default: will be resolved during create_collection
             self.vector_index = VectorIndexConfig()
         else:
             raise TypeError(
                 f"Unsupported vector index configuration type: {type(vector_index).__name__}. "
-                f"Expected VectorIndexConfig, HNSWConfiguration, or None."
+                f"Expected VectorIndexConfig, HNSWConfiguration, IVFConfiguration, or None."
             )
         self.sparse_vector_index = sparse_vector_index
         self.fulltext_index = fulltext_index
@@ -131,6 +140,8 @@ class Schema:
         """
         if isinstance(config, HNSWConfiguration):
             self.vector_index = VectorIndexConfig(hnsw=config)
+        elif isinstance(config, IVFConfiguration):
+            self.vector_index = VectorIndexConfig(ivf=config)
         elif isinstance(config, VectorIndexConfig):
             self.vector_index = config
         elif isinstance(config, SparseVectorIndexConfig):
@@ -140,11 +151,12 @@ class Schema:
         else:
             raise TypeError(
                 f"Unsupported index configuration type: {type(config).__name__}. "
-                f"Expected VectorIndexConfig, HNSWConfiguration, SparseVectorIndexConfig, or FulltextIndexConfig."
+                f"Expected VectorIndexConfig, HNSWConfiguration, IVFConfiguration, SparseVectorIndexConfig, or FulltextIndexConfig."
             )
         return self
 
     def __repr__(self) -> str:
+        """Repr."""
         parts = []
         if self.vector_index is not None:
             parts.append(f"vector_index={self.vector_index}")

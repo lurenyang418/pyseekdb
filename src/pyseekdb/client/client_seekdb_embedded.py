@@ -106,6 +106,7 @@ class SeekdbEmbeddedClient(BaseClient):
 
     @property
     def mode(self) -> str:
+        """Return the client mode identifier."""
         return "SeekdbEmbeddedClient"
 
     def _use_context_manager_for_cursor(self) -> bool:
@@ -271,6 +272,18 @@ class SeekdbEmbeddedClient(BaseClient):
         """
         return super().list_databases(limit=limit, offset=offset, tenant=tenant)
 
+    def _namespace_prewarm(
+        self,
+        collection_id: str | None,
+        collection_name: str,
+        namespace_id: str,
+        namespace_name: str,
+        **kwargs,
+    ) -> None:
+        """Prewarm the namespace logical table to reduce first-query latency."""
+        raise ValueError("prewarm is only supported in shared-storage remote deployment")
+
     def __repr__(self):
+        """Return the developer-readable representation."""
         status = "connected" if self.is_connected() else "disconnected"
         return f"<SeekdbEmbeddedClient path={self.path} database={self.database} status={status}>"

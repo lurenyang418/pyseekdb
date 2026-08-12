@@ -28,7 +28,7 @@ class FilterBuilder:
     LOGICAL_OPS: ClassVar[list[str]] = ["$and", "$or", "$not"]
 
     # Document operators
-    DOCUMENT_OPS: ClassVar[list[str]] = ["$contains", "$regex"]
+    DOCUMENT_OPS: ClassVar[list[str]] = ["$contains", "$not_contains", "$regex"]
 
     @staticmethod
     def build_metadata_filter(where: dict[str, Any], metadata_column: str = "metadata") -> tuple[str, list[Any]]:
@@ -186,6 +186,10 @@ class FilterBuilder:
             if key == "$contains":
                 # Full-text search using MATCH AGAINST
                 clauses.append(f"MATCH({document_column}) AGAINST (%s IN NATURAL LANGUAGE MODE)")
+                params.append(value)
+
+            elif key == "$not_contains":
+                clauses.append(f"NOT (MATCH({document_column}) AGAINST (%s IN NATURAL LANGUAGE MODE))")
                 params.append(value)
 
             elif key == "$regex":

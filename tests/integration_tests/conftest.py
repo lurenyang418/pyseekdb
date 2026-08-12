@@ -10,10 +10,14 @@ from pathlib import Path
 
 import pytest
 
-# Add project path (repo root + src)
-repo_root = Path(__file__).resolve().parents[2]
+# Add project path (repo root + src + this directory for local test helpers)
+integration_tests_root = Path(__file__).resolve().parent
+repo_root = integration_tests_root.parents[1]
 src_root = repo_root / "src"
+sys.path.insert(0, str(integration_tests_root))
 sys.path.insert(0, str(src_root))
+
+from namespace_test_support import maybe_skip_namespace_integration_test  # noqa: E402
 
 import pyseekdb  # noqa: E402
 
@@ -268,3 +272,8 @@ def oceanbase_admin_client():
     with contextlib.suppress(Exception):
         if hasattr(client, "close"):
             client.close()
+
+
+def pytest_runtest_setup(item):
+    """Skip namespace integration tests on unsupported backends or OB versions."""
+    maybe_skip_namespace_integration_test(item)

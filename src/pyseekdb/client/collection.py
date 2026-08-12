@@ -10,9 +10,15 @@ Design Pattern:
 
 from typing import TYPE_CHECKING, Any, Optional
 
+from .validators import (
+    _validate_n_results,
+    _validate_namespace_name,
+)
+
 if TYPE_CHECKING:
     from .embedding_function import Documents as EmbeddingDocuments
     from .embedding_function import EmbeddingFunction
+    from .namespace import Namespace
     from .query_types import QueryHint
     from .schema import SparseVectorIndexConfig
     from .sparse_embedding_function import SparseEmbeddingFunction
@@ -38,29 +44,22 @@ class Collection:
         embedding_function: Optional["EmbeddingFunction[EmbeddingDocuments]"] = None,
         distance: str | None = None,
         sparse_vector_index_config: Optional["SparseVectorIndexConfig"] = None,
+        use_namespace: bool = False,
+        partition_count: int | None = None,
+        has_vector_index: bool = False,
         **metadata,
     ):
-        """
-        Initialize collection object
-
-        Args:
-            client: The client instance that created this collection
-            name: Collection name
-            collection_id: Collection unique identifier (some databases may need this)
-            dimension: Vector dimension
-            embedding_function: Embedding function to convert documents to embeddings
-            distance: Distance metric used by the index (e.g., 'l2', 'cosine', 'inner_product')
-            sparse_vector_index_config: Sparse vector index configuration (optional).
-                When set, the collection supports sparse vector operations.
-            **metadata: Other metadata
-        """
-        self._client = client  # Core: hold reference to the client
+        """Initialize a lightweight collection handle bound to a client implementation."""
+        self._client = client
         self._name = name
         self._id = collection_id
         self._dimension = dimension
         self._embedding_function = embedding_function
         self._distance = distance
         self._sparse_vector_index_config = sparse_vector_index_config
+        self._use_namespace = use_namespace
+        self._partition_count = partition_count
+        self._has_vector_index = has_vector_index
         self._metadata = metadata
 
     # ==================== Properties ====================
@@ -112,8 +111,107 @@ class Collection:
             return self._sparse_vector_index_config.embedding_function
         return None
 
+    @property
+    def use_namespace(self) -> bool:
+        """Whether this collection routes data operations through namespaces."""
+        return self._use_namespace
+
+    @property
+    def has_vector_index(self) -> bool:
+        """Whether this collection has a dense VECTOR INDEX (namespace IVF)."""
+        return self._has_vector_index
+
+    @property
+    def partition_count(self) -> int | None:
+        """Number of partitions for the namespace physical tables.
+
+        Returns the configured partition count for namespace-enabled collections
+        (defaults to 1000 when not set at creation), or None for non-namespace
+        collections, which are not partitioned.
+        """
+        return self._partition_count
+
+    def _guard_collection_data_api(self) -> None:
+        """Raise if collection-level DML/DQL is used on a namespace-enabled collection."""
+        if self._use_namespace:
+            raise ValueError(
+                "This collection has namespace enabled. "
+                "Use namespace.add/update/upsert/delete/query/get instead of collection-level methods. "
+                "Get a namespace via collection.create_namespace() or collection.get_namespace()."
+            )
+
+    def _guard_namespace_enabled(self) -> None:
+        """Raise if namespace APIs are used on a non-namespace collection."""
+        if not self._use_namespace:
+            raise ValueError(
+                "Namespace is not enabled for this collection. Use use_namespace=True when creating the collection."
+            )
+        if not self._client._ns_collection_exists_by_id(self._id):
+            raise ValueError(
+                f"Collection '{self._name}' no longer exists (it may have been deleted). "
+                "Namespace operations are not allowed on a deleted collection."
+            )
+
     def __repr__(self) -> str:
-        return f"Collection(name='{self._name}', dimension={self._dimension}, client={self._client.mode})"
+        """Return a debug-friendly representation of this collection."""
+        ns_str = ", use_namespace=True" if self._use_namespace else ""
+        return f"Collection(name='{self._name}', dimension={self._dimension}{ns_str}, client={self._client.mode})"
+
+    # ==================== Namespace Management ====================
+
+    def create_namespace(self, name: str) -> "Namespace":
+        """Create a new namespace and return a handle for scoped operations."""
+        self._guard_namespace_enabled()
+        _validate_namespace_name(name)
+        from .namespace import Namespace
+
+        meta = self._client._create_ns_namespace_meta(self._id, name)
+        return Namespace(client=self._client, collection=self, name=name, namespace_id=meta["namespace_id"])
+
+    def get_namespace(self, name: str) -> "Namespace":
+        """Return an existing namespace handle or raise if it does not exist."""
+        self._guard_namespace_enabled()
+        _validate_namespace_name(name)
+        from .namespace import Namespace
+
+        meta = self._client._get_ns_namespace_meta(self._id, name)
+        if meta is None:
+            raise ValueError(f"Namespace '{name}' not found")
+        return Namespace(client=self._client, collection=self, name=name, namespace_id=meta["namespace_id"])
+
+    def get_or_create_namespace(self, name: str) -> "Namespace":
+        """Return an existing namespace or create it if missing."""
+        self._guard_namespace_enabled()
+        _validate_namespace_name(name)
+        from .namespace import Namespace
+
+        meta = self._client._get_or_create_ns_namespace_meta(self._id, name)
+        return Namespace(client=self._client, collection=self, name=name, namespace_id=meta["namespace_id"])
+
+    def delete_namespace(self, name: str) -> None:
+        """Delete a namespace and its records from this collection."""
+        self._guard_namespace_enabled()
+        _validate_namespace_name(name)
+        self._client._delete_ns_namespace_meta(self._id, name)
+
+    def list_namespaces(self) -> list["Namespace"]:
+        """List all active namespaces in this collection."""
+        self._guard_namespace_enabled()
+        from .namespace import Namespace
+
+        metas = self._client._list_ns_namespaces(self._id)
+        return [
+            Namespace(client=self._client, collection=self, name=m["namespace_name"], namespace_id=m["namespace_id"])
+            for m in metas
+        ]
+
+    def has_namespace(self, name: str) -> bool:
+        """Return whether a namespace with the given name exists."""
+        self._guard_namespace_enabled()
+        _validate_namespace_name(name)
+        return self._client._has_ns_namespace(self._id, name)
+
+    # ==================== End Namespace Management ====================
 
     def fork(self, forked_name: str) -> "Collection":
         """
@@ -151,6 +249,7 @@ class Collection:
             assert forked.count() == 4    # Forked has new data
 
         """
+        self._guard_collection_data_api()
         self._client._collection_fork(collection=self, forked_name=forked_name)
         collection = self._client.get_collection(forked_name, embedding_function=self._embedding_function)
         return collection
@@ -195,6 +294,7 @@ class Collection:
                 metadatas=[{"tag": "A"}, {"tag": "B"}]
             )
         """
+        self._guard_collection_data_api()
         return self._client._collection_add(
             collection_id=self._id,
             collection_name=self._name,
@@ -238,6 +338,7 @@ class Collection:
                 embeddings=[[0.9, 0.8], [0.7, 0.6]]
             )
         """
+        self._guard_collection_data_api()
         return self._client._collection_update(
             collection_id=self._id,
             collection_name=self._name,
@@ -281,6 +382,7 @@ class Collection:
                 embeddings=[[0.1, 0.2], [0.3, 0.4], [0.5, 0.6]]
             )
         """
+        self._guard_collection_data_api()
         return self._client._collection_upsert(
             collection_id=self._id,
             collection_name=self._name,
@@ -322,6 +424,7 @@ class Collection:
             # Delete by document filter
             collection.delete(where_document={"$contains": "keyword"})
         """
+        self._guard_collection_data_api()
         return self._client._collection_delete(
             collection_id=self._id,
             collection_name=self._name,
@@ -407,6 +510,8 @@ class Collection:
                 query_hint=QueryHint(parallel=8, query_timeout=10.0)
             )
         """
+        self._guard_collection_data_api()
+        _validate_n_results(n_results)
         return self._client._collection_query(
             collection_id=self._id,
             collection_name=self._name,
@@ -488,6 +593,7 @@ class Collection:
                 query_hint=QueryHint(parallel=4, query_timeout=5.0)
             )
         """
+        self._guard_collection_data_api()
         return self._client._collection_get(
             collection_id=self._id,
             collection_name=self._name,
@@ -575,6 +681,8 @@ class Collection:
                 query_hint=QueryHint(parallel=6, query_timeout=15.0)
             )
         """
+        self._guard_collection_data_api()
+        _validate_n_results(n_results)
         # When no query/knn provided, return only ids/distances by default
         if include is None and not query and not knn:
             include = []
@@ -619,6 +727,7 @@ class Collection:
             count = collection.count()
             print(f"Collection has {count} items")
         """
+        self._guard_collection_data_api()
         return self._client._collection_count(collection_id=self._id, collection_name=self._name)
 
     def peek(self, limit: int = 10) -> dict[str, Any]:
@@ -642,6 +751,7 @@ class Collection:
                 print(f"ID: {preview['ids'][i]}, Document: {preview['documents'][i]}")
                 print(f"Metadata: {preview['metadatas'][i]}, Embedding: {preview['embeddings'][i]}")
         """
+        self._guard_collection_data_api()
         return self._client._collection_get(
             collection_id=self._id,
             collection_name=self._name,

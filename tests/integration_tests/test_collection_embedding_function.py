@@ -637,7 +637,7 @@ class TestCollectionEmbeddingFunction:
         with contextlib.suppress(Exception):
             db_client.delete_collection(name=collection_name)
 
-    def test_multiple_custom_embedding_functions(self, db_client):  # noqa: C901
+    def test_multiple_custom_embedding_functions(self, db_client):
         """
         Test multiple collections with different custom embedding functions.
 
@@ -807,7 +807,8 @@ class TestCollectionEmbeddingFunction:
             EmbeddingFunctionRegistry._registry.pop(ef.name())
 
             # Actually, since we registered it, getting should work
-            pytest.raises(ValueError, db_client.get_collection, name=collection_name)
+            with pytest.raises(ValueError):
+                db_client.get_collection(name=collection_name)
         finally:
             # Cleanup
             with contextlib.suppress(Exception):

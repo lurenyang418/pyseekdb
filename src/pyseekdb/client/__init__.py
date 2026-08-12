@@ -31,6 +31,9 @@ from .configuration import (
     HNSWConfiguration,
     IKMode,
     IKProperties,
+    IVFConfiguration,
+    IVFIndexLib,
+    IVFIndexType,
     Ngram2Properties,
     NgramProperties,
     SpaceProperties,
@@ -67,6 +70,7 @@ def _resolve_password(password: str) -> str:
 
 def _default_seekdb_path() -> str:
     # Keep existing behavior: default to "seekdb.db" under current working directory.
+    """Return the default on-disk path for the embedded SeekDB store."""
     return os.path.abspath("seekdb.db")
 
 
@@ -173,6 +177,9 @@ __all__ = [
     "HNSWConfiguration",
     "IKMode",
     "IKProperties",
+    "IVFConfiguration",
+    "IVFIndexLib",
+    "IVFIndexType",
     "K",
     "Ngram2Properties",
     "NgramProperties",

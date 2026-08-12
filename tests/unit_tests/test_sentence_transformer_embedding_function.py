@@ -97,7 +97,7 @@ class TestSentenceTransformerEmbeddingFunctionPersistence:
         config = ef.get_config()
 
         assert config["kwargs"]["trust_remote_code"] is True
-        assert config["kwargs"]["use_auth_token"] == "test-token"  # noqa: S105
+        assert config["kwargs"]["use_auth_token"] == "test-token"
 
     def test_build_from_config_with_defaults(self):
         """Test that build_from_config() restores instance with default values"""

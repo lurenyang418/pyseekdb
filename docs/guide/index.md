@@ -9,6 +9,7 @@ This guide covers installation, connections, data modeling, and common operation
 client-connection
 admin-client
 collection-management
+namespace
 dml
 dql
 embedding-functions

@@ -1,6 +1,8 @@
+"""Index and analyzer configuration types for collection and schema creation."""
+
 import warnings
 from dataclasses import dataclass
-from enum import Enum
+from enum import Enum, StrEnum
 from typing import Any, TypedDict
 
 from pyseekdb.client.embedding_function import EmbeddingFunction
@@ -12,10 +14,18 @@ from pyseekdb.client.types import _NOT_PROVIDED, K
 # So we use 384 as the default dimension to match
 DEFAULT_VECTOR_DIMENSION = 384  # Matches DefaultEmbeddingFunction dimension
 DEFAULT_DISTANCE_METRIC = "cosine"
+MAX_HNSW_VECTOR_DIMENSION = 4096
+# Namespace IVF uses logic_data_table with LOB_INROW_THRESHOLD sized for float32 vectors
+# plus ObLobCommon header (see OB ob_vector_index_util.cpp IVF in-row check).
+MAX_IVF_VECTOR_DIMENSION = MAX_HNSW_VECTOR_DIMENSION
+# Align with OB IVF in-row validation: dim * sizeof(float) + sizeof(ObLobCommon).
+_OB_LOB_COMMON_HEADER_BYTES = 4
+LOGIC_DATA_TABLE_LOB_INROW_THRESHOLD = MAX_IVF_VECTOR_DIMENSION * 4 + _OB_LOB_COMMON_HEADER_BYTES
 PrimitiveValue = str | int | float | bool
 
 
 def _ensure_primitive_properties(properties: dict[str, Any] | None, *, field_name: str = "properties") -> None:
+    """Ensure index property values are primitive JSON-compatible scalars."""
     if properties is None:
         return
     if not isinstance(properties, dict):
@@ -26,6 +36,7 @@ def _ensure_primitive_properties(properties: dict[str, Any] | None, *, field_nam
 
 
 def _normalize_str_enum(value: str | Enum, *, field_name: str) -> str:
+    """Normalize enum or string values to lowercase strings."""
     if isinstance(value, Enum):
         value = value.value
     if not isinstance(value, str):
@@ -34,6 +45,7 @@ def _normalize_str_enum(value: str | Enum, *, field_name: str) -> str:
 
 
 def _validate_int_range(value: Any, *, key: str, min_value: int, max_value: int) -> None:
+    """Validate an integer option is within the allowed inclusive range."""
     if isinstance(value, bool) or not isinstance(value, int):
         raise TypeError(f"{key} must be an integer, got {type(value).__name__}")
     if value < min_value or value > max_value:
@@ -41,6 +53,7 @@ def _validate_int_range(value: Any, *, key: str, min_value: int, max_value: int)
 
 
 def _validate_float_range(value: Any, *, key: str, min_value: float, max_value: float) -> None:
+    """Validate a numeric option is within the allowed inclusive range."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise TypeError(f"{key} must be a number, got {type(value).__name__}")
     numeric_value = float(value)
@@ -49,6 +62,7 @@ def _validate_float_range(value: Any, *, key: str, min_value: float, max_value: 
 
 
 def _validate_space_or_beng_properties(properties: dict[str, PrimitiveValue]) -> None:
+    """Validate tokenizer size bounds for space and beng analyzers."""
     if not properties:
         return
     min_token_size = properties.get("min_token_size")
@@ -65,6 +79,7 @@ def _validate_space_or_beng_properties(properties: dict[str, PrimitiveValue]) ->
 
 
 def _validate_ngram_properties(properties: dict[str, PrimitiveValue]) -> None:
+    """Validate ngram analyzer token size bounds."""
     if not properties:
         return
     if "ngram_token_size" in properties:
@@ -72,6 +87,7 @@ def _validate_ngram_properties(properties: dict[str, PrimitiveValue]) -> None:
 
 
 def _validate_ngram2_properties(properties: dict[str, PrimitiveValue]) -> None:
+    """Validate ngram2 analyzer min/max ngram size bounds."""
     if not properties:
         return
     min_ngram_size = properties.get("min_ngram_size")
@@ -88,6 +104,7 @@ def _validate_ngram2_properties(properties: dict[str, PrimitiveValue]) -> None:
 
 
 def _normalize_ik_mode(properties: dict[str, PrimitiveValue]) -> None:
+    """Normalize and validate IK analyzer mode values."""
     if not properties:
         return
     if "ik_mode" not in properties:
@@ -104,6 +121,7 @@ def _normalize_ik_mode(properties: dict[str, PrimitiveValue]) -> None:
 
 
 def _validate_fulltext_properties_by_analyzer(analyzer: str, properties: dict[str, PrimitiveValue] | None) -> None:
+    """Validate fulltext analyzer properties for the selected analyzer type."""
     if not properties:
         return
     if analyzer in {FulltextAnalyzer.SPACE.value, FulltextAnalyzer.BENG.value}:
@@ -117,9 +135,10 @@ def _validate_fulltext_properties_by_analyzer(analyzer: str, properties: dict[st
 
 
 def _validate_hnsw_base_fields(config: "HNSWConfiguration") -> None:
+    """Validate core HNSW index fields shared across index subtypes."""
     if isinstance(config.dimension, bool) or not isinstance(config.dimension, int):
         raise TypeError(f"dimension must be an integer, got {type(config.dimension).__name__}")
-    _validate_int_range(config.dimension, key="dimension", min_value=1, max_value=4096)
+    _validate_int_range(config.dimension, key="dimension", min_value=1, max_value=MAX_HNSW_VECTOR_DIMENSION)
 
     config.distance = _normalize_str_enum(config.distance, field_name="distance")
     valid_distances = [e.value for e in DistanceMetric]
@@ -138,6 +157,7 @@ def _validate_hnsw_base_fields(config: "HNSWConfiguration") -> None:
 
 
 def _normalize_hnsw_properties(properties: dict[str, PrimitiveValue]) -> None:
+    """Strip reserved HNSW keys from user-supplied property bags."""
     reserved_keys = [
         key
         for key in properties
@@ -162,6 +182,7 @@ def _normalize_hnsw_properties(properties: dict[str, PrimitiveValue]) -> None:
 
 
 def _validate_hnsw_configuration(config: "HNSWConfiguration") -> None:
+    """Validate optional HNSW tuning parameters."""
     if config.M is not None:
         _validate_int_range(config.M, key="M", min_value=5, max_value=128)
     if config.ef_construction is not None:
@@ -183,7 +204,7 @@ def _validate_hnsw_configuration(config: "HNSWConfiguration") -> None:
         raise TypeError(f"bq_use_fht must be a bool, got {type(config.bq_use_fht).__name__}")
 
 
-class DistanceMetric(str, Enum):
+class DistanceMetric(StrEnum):
     """
     Distance metric constants for vector similarity calculation.
 
@@ -195,17 +216,38 @@ class DistanceMetric(str, Enum):
     INNER_PRODUCT = "inner_product"
 
 
-class HNSWIndexType(str, Enum):
+class HNSWIndexType(StrEnum):
+    """Supported HNSW index subtypes."""
+
     HNSW = "hnsw"
     HNSW_SQ = "hnsw_sq"
     HNSW_BQ = "hnsw_bq"
 
 
-class HNSWIndexLib(str, Enum):
+class HNSWIndexLib(StrEnum):
+    """Supported HNSW index libraries."""
+
     VSAG = "vsag"
 
 
-class FulltextAnalyzer(str, Enum):
+class IVFIndexType(StrEnum):
+    """Supported IVF index subtypes for namespace-enabled collections."""
+
+    IVF_FLAT = "ivf_flat"
+    IVF_SQ8 = "ivf_sq8"
+    IVF_PQ = "ivf_pq"
+
+
+class IVFIndexLib(StrEnum):
+    """Supported IVF index libraries."""
+
+    OB = "ob"
+    VSAG = "vsag"
+
+
+class FulltextAnalyzer(StrEnum):
+    """Supported fulltext analyzers."""
+
     SPACE = "space"
     NGRAM = "ngram"
     BENG = "beng"
@@ -213,12 +255,16 @@ class FulltextAnalyzer(str, Enum):
     NGRAM2 = "ngram2"
 
 
-class IKMode(str, Enum):
+class IKMode(StrEnum):
+    """Supported IK analyzer segmentation modes."""
+
     SMART = "smart"
     MAX_WORD = "max_word"
 
 
-class BQRefineType(str, Enum):
+class BQRefineType(StrEnum):
+    """Supported binary-quantization refine types for HNSW BQ indexes."""
+
     SQ8 = "sq8"
     FP32 = "fp32"
 
@@ -237,6 +283,7 @@ class FulltextIndexConfig:
     properties: dict[str, PrimitiveValue] | None = None
 
     def __post_init__(self):
+        """Validate analyzer name and analyzer-specific properties."""
         self.analyzer = _normalize_str_enum(self.analyzer, field_name="analyzer")
         _ensure_primitive_properties(self.properties)
 
@@ -283,6 +330,7 @@ class HNSWConfiguration:
     properties: dict[str, PrimitiveValue] | None = None
 
     def __post_init__(self):
+        """Validate HNSW configuration fields and normalize properties."""
         _validate_hnsw_base_fields(self)
         _validate_hnsw_configuration(self)
 
@@ -294,34 +342,102 @@ class HNSWConfiguration:
 
 
 class IKProperties(TypedDict, total=False):
+    """Typed fulltext properties for the IK analyzer."""
+
     ik_mode: str | IKMode
 
 
 class SpaceProperties(TypedDict, total=False):
+    """Typed fulltext properties for the space analyzer."""
+
     min_token_size: int
     max_token_size: int
 
 
 class NgramProperties(TypedDict, total=False):
+    """Typed fulltext properties for the ngram analyzer."""
+
     ngram_token_size: int
 
 
 class Ngram2Properties(TypedDict, total=False):
+    """Typed fulltext properties for the ngram2 analyzer."""
+
     min_ngram_size: int
     max_ngram_size: int
 
 
 class BengProperties(TypedDict, total=False):
+    """Typed fulltext properties for the beng analyzer."""
+
     min_token_size: int
     max_token_size: int
 
 
 @dataclass
+class IVFConfiguration:
+    """
+    IVF (Inverted File) index configuration for Agent Database namespace-enabled collections.
+
+    Args:
+        dimension: Vector dimension (1..4096 on namespace IVF). logic_data_table is
+            created with ``LOB_INROW_THRESHOLD`` so float32 vectors stay in-row.
+        distance: Distance metric for similarity calculation (e.g., 'l2', 'cosine', 'inner_product')
+        type: IVF index subtype ('ivf_flat', 'ivf_sq8', 'ivf_pq')
+        centroids_fresh_mode: SPFresh mode for online index updates (e.g., 'spfresh'). Defaults to None (disabled).
+        properties: Optional dictionary of additional IVF index properties
+    """
+
+    dimension: int = DEFAULT_VECTOR_DIMENSION
+    distance: str | DistanceMetric = DistanceMetric.COSINE.value
+    type: str | IVFIndexType = IVFIndexType.IVF_FLAT.value
+    lib: str | IVFIndexLib = IVFIndexLib.OB.value
+    centroids_fresh_mode: str | None = None
+    properties: dict[str, PrimitiveValue] | None = None
+
+    def __post_init__(self):
+        """Validate IVF configuration fields and normalize properties."""
+        if isinstance(self.dimension, bool) or not isinstance(self.dimension, int):
+            raise TypeError(f"dimension must be an integer, got {type(self.dimension).__name__}")
+        _validate_int_range(self.dimension, key="dimension", min_value=1, max_value=MAX_IVF_VECTOR_DIMENSION)
+
+        self.distance = _normalize_str_enum(self.distance, field_name="distance")
+        valid_distances = [e.value for e in DistanceMetric]
+        if self.distance not in valid_distances:
+            raise ValueError(f"distance must be one of {valid_distances}, got {self.distance}")
+
+        self.type = _normalize_str_enum(self.type, field_name="type")
+        valid_types = [e.value for e in IVFIndexType]
+        if self.type not in valid_types:
+            raise ValueError(f"type must be one of {valid_types}, got {self.type}")
+
+        self.lib = _normalize_str_enum(self.lib, field_name="lib")
+        valid_libs = [e.value for e in IVFIndexLib]
+        if self.lib not in valid_libs:
+            raise ValueError(f"lib must be one of {valid_libs}, got {self.lib}")
+
+        if self.centroids_fresh_mode is not None and not isinstance(self.centroids_fresh_mode, str):
+            raise TypeError(f"centroids_fresh_mode must be a str, got {type(self.centroids_fresh_mode).__name__}")
+
+        _ensure_primitive_properties(self.properties)
+
+
+@dataclass
 class VectorIndexConfig:
+    """Dense vector index configuration wrapper for HNSW or IVF indexes."""
+
+    ivf: IVFConfiguration | None = None
     hnsw: HNSWConfiguration | None = None
     embedding_function: EmbeddingFunction | None = _NOT_PROVIDED
 
     def __post_init__(self):
+        """Resolve defaults and validate the selected dense vector index."""
+        if self.ivf is not None and self.hnsw is not None:
+            raise ValueError("Only one of ivf or hnsw can be configured")
+        if self.embedding_function is _NOT_PROVIDED:
+            self.embedding_function = DefaultEmbeddingFunction()
+        if self.ivf is not None:
+            self.ivf.__post_init__()
         if self.hnsw is not None:
             self.hnsw.__post_init__()
 
@@ -383,6 +499,7 @@ class SparseVectorIndexConfig:
     properties: dict[str, PrimitiveValue] | None = None
 
     def __post_init__(self):  # noqa: C901
+        """Validate sparse vector index options and embedding function persistence."""
         if self.distance != DistanceMetric.INNER_PRODUCT.value:
             raise ValueError(
                 f"Sparse vector index only supports {DistanceMetric.INNER_PRODUCT.value} distance, got '{self.distance}'"
@@ -415,6 +532,7 @@ class SparseVectorIndexConfig:
             )
 
     def _validate_source_key(self) -> None:
+        """Normalize and validate the sparse vector source field."""
         if self.source_key is None:
             self.source_key = K.DOCUMENT
             return
@@ -462,6 +580,7 @@ class Configuration:
         hnsw: HNSWConfiguration | None = None,
         fulltext_config: FulltextIndexConfig | None = None,
     ):
+        """Initialize deprecated collection configuration wrapper."""
         self.hnsw = hnsw
         self.fulltext_config = fulltext_config
         warnings.warn("Configuration is deprecated. Please use Schema instead.", DeprecationWarning, stacklevel=2)

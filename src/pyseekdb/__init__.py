@@ -85,6 +85,9 @@ from .client import (
     HNSWConfiguration,
     IKMode,
     IKProperties,
+    IVFConfiguration,
+    IVFIndexLib,
+    IVFIndexType,
     K,
     Ngram2Properties,
     NgramProperties,
@@ -102,6 +105,7 @@ from .client import (
     register_sparse_embedding_function,
 )
 from .client.collection import Collection
+from .client.namespace import Namespace
 
 try:
     __version__ = importlib.metadata.version("pyseekdb")
@@ -127,7 +131,11 @@ __all__ = [
     "HNSWConfiguration",
     "IKMode",
     "IKProperties",
+    "IVFConfiguration",
+    "IVFIndexLib",
+    "IVFIndexType",
     "K",
+    "Namespace",
     "Ngram2Properties",
     "NgramProperties",
     "RemoteServerClient",

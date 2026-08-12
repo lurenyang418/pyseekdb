@@ -40,6 +40,8 @@ NUM_PROCESSES = 2
 THREADS_PER_PROCESS = 3
 ITEMS_PER_THREAD = 5
 WORKER_TIMEOUT_SECONDS = 60
+# OB CE mini in CI defaults to 10s; bulk HNSW insert/refresh can exceed that under load.
+OB_QUERY_TIMEOUT_MICROSECONDS = 60_000_000
 MIN_PYLIBSEEKDB_VERSION = Version("1.3.0.post1")
 _MP_CONTEXT = mp.get_context("spawn")
 
@@ -60,31 +62,41 @@ pytestmark = pytest.mark.parametrize(
 
 
 def _purge_pyseekdb_modules() -> None:
+    """Purge pyseekdb modules."""
     for module_name in list(sys.modules):
         if module_name == "pyseekdb" or module_name.startswith("pyseekdb."):
             del sys.modules[module_name]
 
 
 def _build_embedding(seed: int, embed_dim: int = EMBED_DIM) -> list[float]:
+    """Build embedding."""
     base = float(seed + 1)
     return [((base + i) % 13) / 13.0 for i in range(embed_dim)]
 
 
 def _record_id(process_id: int, thread_id: int, seq: int) -> str:
+    """Record id."""
     return f"p{process_id:02d}_t{thread_id:02d}_{seq:04d}"
 
 
 def _import_pyseekdb():
+    """Import pyseekdb."""
     return importlib.import_module("pyseekdb")
 
 
+def _relax_oceanbase_query_timeout(client) -> None:
+    """Raise OB session query timeout for slow CI mini clusters."""
+    client._server._execute(f"SET ob_query_timeout = {OB_QUERY_TIMEOUT_MICROSECONDS}")
+
+
 def _make_client(client_config: dict[str, Any]):
+    """Make client."""
     pyseekdb = _import_pyseekdb()
     mode = client_config["mode"]
     if mode == "embedded":
         return pyseekdb.Client(path=client_config["path"], database=client_config["database"])
     if mode in ("server", "oceanbase"):
-        return pyseekdb.Client(
+        client = pyseekdb.Client(
             host=client_config["host"],
             port=client_config["port"],
             tenant=client_config["tenant"],
@@ -92,36 +104,46 @@ def _make_client(client_config: dict[str, Any]):
             user=client_config["user"],
             password=client_config["password"],
         )
+        if mode == "oceanbase":
+            _relax_oceanbase_query_timeout(client)
+        return client
     raise ValueError(f"unsupported client mode: {mode}")
 
 
 def _make_admin_client(client_config: dict[str, Any]):
+    """Make admin client."""
     pyseekdb = _import_pyseekdb()
     mode = client_config["mode"]
     if mode == "embedded":
         return pyseekdb.AdminClient(path=client_config["path"])
     if mode in ("server", "oceanbase"):
-        return pyseekdb.AdminClient(
+        admin = pyseekdb.AdminClient(
             host=client_config["host"],
             port=client_config["port"],
             tenant=client_config["tenant"],
             user=client_config["user"],
             password=client_config["password"],
         )
+        if mode == "oceanbase":
+            _relax_oceanbase_query_timeout(admin)
+        return admin
     raise ValueError(f"unsupported client mode: {mode}")
 
 
 def _get_collection(client, collection_name: str):
+    """Get collection."""
     return client.get_collection(collection_name, embedding_function=None)
 
 
 def _refresh_collection(client_config: dict[str, Any], collection_name: str) -> None:
+    """Refresh collection."""
     client = _make_client(client_config)
     collection = _get_collection(client, collection_name)
     collection.refresh_index()
 
 
 def _require_embedded_pylibseekdb() -> None:
+    """Require embedded pylibseekdb."""
     try:
         import pylibseekdb  # noqa: F401
     except ImportError:
@@ -138,12 +160,13 @@ def _require_embedded_pylibseekdb() -> None:
         )
 
 
-def _run_processes(  # noqa: C901
+def _run_processes(
     target: Callable[..., None],
     args_list: list[tuple[Any, ...]],
     expected_count: int,
     timeout: float = WORKER_TIMEOUT_SECONDS,
 ) -> list[dict[str, Any]]:
+    """Run processes."""
     result_queue: mp.Queue[dict[str, Any]] = _MP_CONTEXT.Queue()
     processes = [_MP_CONTEXT.Process(target=target, args=(*args, result_queue)) for args in args_list]
 
@@ -184,6 +207,7 @@ def _get_or_create_worker(
     delay: float,
     output: mp.Queue[dict[str, Any]],
 ) -> None:
+    """Get or create worker."""
     _purge_pyseekdb_modules()
     time.sleep(delay)
     try:
@@ -207,9 +231,11 @@ def _add_worker(
     items_per_thread: int,
     output: mp.Queue[dict[str, Any]],
 ) -> None:
+    """Add worker."""
     _purge_pyseekdb_modules()
 
     def add_in_thread(thread_id: int) -> int:
+        """Add in thread."""
         client = _make_client(client_config)
         collection = _get_collection(client, collection_name)
         ids = [_record_id(process_id, thread_id, seq) for seq in range(items_per_thread)]
@@ -238,9 +264,11 @@ def _get_worker(
     items_per_thread: int,
     output: mp.Queue[dict[str, Any]],
 ) -> None:
+    """Get worker."""
     _purge_pyseekdb_modules()
 
     def get_in_thread(thread_id: int) -> int:
+        """Get in thread."""
         client = _make_client(client_config)
         collection = _get_collection(client, collection_name)
         ids = [_record_id(process_id, thread_id, seq) for seq in range(items_per_thread)]
@@ -268,9 +296,11 @@ def _query_worker(
     queries_per_thread: int,
     output: mp.Queue[dict[str, Any]],
 ) -> None:
+    """Query worker."""
     _purge_pyseekdb_modules()
 
     def query_in_thread(thread_id: int) -> int:
+        """Query in thread."""
         client = _make_client(client_config)
         collection = _get_collection(client, collection_name)
         completed = 0
@@ -305,9 +335,11 @@ def _update_worker(
     items_per_thread: int,
     output: mp.Queue[dict[str, Any]],
 ) -> None:
+    """Update worker."""
     _purge_pyseekdb_modules()
 
     def update_in_thread(thread_id: int) -> int:
+        """Update in thread."""
         client = _make_client(client_config)
         collection = _get_collection(client, collection_name)
         ids = [_record_id(process_id, thread_id, seq) for seq in range(items_per_thread)]
@@ -343,9 +375,11 @@ def _delete_worker(
     items_per_thread: int,
     output: mp.Queue[dict[str, Any]],
 ) -> None:
+    """Delete worker."""
     _purge_pyseekdb_modules()
 
     def delete_in_thread(thread_id: int) -> int:
+        """Delete in thread."""
         client = _make_client(client_config)
         collection = _get_collection(client, collection_name)
         ids = [_record_id(process_id, thread_id, seq) for seq in range(items_per_thread)]
@@ -374,9 +408,11 @@ def _mixed_crud_worker(
     items_per_thread: int,
     output: mp.Queue[dict[str, Any]],
 ) -> None:
+    """Mixed crud worker."""
     _purge_pyseekdb_modules()
 
     def mixed_in_thread(thread_id: int) -> dict[str, int]:
+        """Mixed in thread."""
         client = _make_client(client_config)
         collection = _get_collection(client, collection_name)
         ids = [_record_id(process_id, thread_id, seq) for seq in range(items_per_thread)]
@@ -443,6 +479,7 @@ def _mixed_crud_worker(
 
 
 def _build_client_config(mode: str) -> tuple[dict[str, Any], Path | None]:
+    """Build client config."""
     database = f"test_mp_{uuid.uuid4().hex[:8]}"
     temp_db_path: Path | None = None
 
@@ -482,6 +519,7 @@ def _build_client_config(mode: str) -> tuple[dict[str, Any], Path | None]:
 
 @pytest.fixture
 def multiprocess_db(_mode):
+    """Multiprocess db."""
     client_config, temp_db_path = _build_client_config(_mode)
     yield client_config
     if temp_db_path is not None:
@@ -491,6 +529,7 @@ def multiprocess_db(_mode):
 
 @pytest.fixture
 def crud_collection(multiprocess_db):
+    """Crud collection."""
     client_config = multiprocess_db
     collection_name = f"mp_crud_{uuid.uuid4().hex}"
 
@@ -515,6 +554,7 @@ def _seed_collection_rows(
     threads_per_process: int,
     items_per_thread: int,
 ) -> int:
+    """Seed collection rows."""
     client = _make_client(client_config)
     collection = _get_collection(client, collection_name)
 
@@ -538,7 +578,10 @@ def _seed_collection_rows(
 
 
 class TestGetOrCreateCollectionMultiprocess:
+    """TestGetOrCreateCollectionMultiprocess class."""
+
     def test_concurrent_get_or_create_collection(self, multiprocess_db, _mode):
+        """Test concurrent get or create collection."""
         client_config = multiprocess_db
         collection_name = f"mp_collection_{uuid.uuid4().hex}"
 
@@ -560,13 +603,23 @@ class TestGetOrCreateCollectionMultiprocess:
             assert client.has_collection(collection_name)
             collection = _get_collection(client, collection_name)
             assert collection.name == collection_name
+            rows = client._server._execute(
+                f"SELECT collection_id FROM sdk_collections WHERE collection_name = '{collection_name}'"
+            )
+            assert len(rows) == 1, f"expected exactly one sdk_collections row for {collection_name!r}, got {len(rows)}"
+            row = rows[0]
+            catalog_id = row["collection_id"] if isinstance(row, dict) else row[0]
+            assert str(catalog_id) == str(collection.id)
         finally:
             with contextlib.suppress(Exception):
                 client.delete_collection(collection_name)
 
 
 class TestMultiprocessMultithreadCrud:
+    """TestMultiprocessMultithreadCrud class."""
+
     def test_concurrent_add(self, crud_collection, _mode):
+        """Test concurrent add."""
         client_config, collection_name = crud_collection
 
         results = _run_processes(
@@ -590,6 +643,7 @@ class TestMultiprocessMultithreadCrud:
         assert collection.count() == expected_rows
 
     def test_concurrent_get(self, crud_collection, _mode):
+        """Test concurrent get."""
         client_config, collection_name = crud_collection
         expected_rows = _seed_collection_rows(
             client_config, collection_name, NUM_PROCESSES, THREADS_PER_PROCESS, ITEMS_PER_THREAD
@@ -609,6 +663,7 @@ class TestMultiprocessMultithreadCrud:
         assert sum(result["fetched"] for result in results) == expected_rows
 
     def test_concurrent_query(self, crud_collection, _mode):
+        """Test concurrent query."""
         client_config, collection_name = crud_collection
         _seed_collection_rows(client_config, collection_name, NUM_PROCESSES, THREADS_PER_PROCESS, ITEMS_PER_THREAD)
 
@@ -627,6 +682,7 @@ class TestMultiprocessMultithreadCrud:
         assert sum(result["queried"] for result in results) == expected_queries
 
     def test_concurrent_update(self, crud_collection, _mode):
+        """Test concurrent update."""
         client_config, collection_name = crud_collection
         expected_rows = _seed_collection_rows(
             client_config, collection_name, NUM_PROCESSES, THREADS_PER_PROCESS, ITEMS_PER_THREAD
@@ -646,6 +702,7 @@ class TestMultiprocessMultithreadCrud:
         assert sum(result["updated"] for result in results) == expected_rows
 
     def test_concurrent_delete(self, crud_collection, _mode):
+        """Test concurrent delete."""
         client_config, collection_name = crud_collection
         expected_rows = _seed_collection_rows(
             client_config, collection_name, NUM_PROCESSES, THREADS_PER_PROCESS, ITEMS_PER_THREAD
@@ -669,6 +726,7 @@ class TestMultiprocessMultithreadCrud:
         assert collection.count() == 0
 
     def test_concurrent_mixed_crud(self, crud_collection, _mode):
+        """Test concurrent mixed crud."""
         client_config, collection_name = crud_collection
 
         results = _run_processes(
