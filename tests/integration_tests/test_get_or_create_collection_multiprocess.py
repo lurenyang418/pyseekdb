@@ -12,7 +12,6 @@ integration step.
 from __future__ import annotations
 
 import contextlib
-import gc
 import importlib
 import importlib.metadata
 import multiprocessing as mp
@@ -55,6 +54,9 @@ OB_PORT = int(os.environ.get("OB_PORT", "11202"))
 OB_TENANT = os.environ.get("OB_TENANT", "mysql")
 OB_USER = os.environ.get("OB_USER", "root")
 OB_PASSWORD = os.environ.get("OB_PASSWORD", "")
+
+# Keep database files off system temp directories, which may be tmpfs and reject O_DIRECT.
+SEEKDB_TEST_DATA_ROOT = Path(os.environ.get("SEEKDB_TEST_DATA_ROOT", str(repo_root / ".seekdb-test-data")))
 
 pytestmark = pytest.mark.parametrize(
     "_mode", ["embedded", "server", "oceanbase"], ids=["embedded", "server", "oceanbase"]
@@ -478,14 +480,15 @@ def _mixed_crud_worker(
         output.put({"ok": False, "process_id": process_id, "error_type": type(exc).__name__, "error": str(exc)})
 
 
-def _build_client_config(mode: str) -> tuple[dict[str, Any], Path | None]:
+def _build_client_config(mode: str) -> tuple[dict[str, Any], Path | None, Any]:
     """Build client config."""
     database = f"test_mp_{uuid.uuid4().hex[:8]}"
     temp_db_path: Path | None = None
 
     if mode == "embedded":
         _require_embedded_pylibseekdb()
-        temp_db_path = Path(tempfile.mkdtemp(prefix="seekdb-mp-"))
+        SEEKDB_TEST_DATA_ROOT.mkdir(parents=True, exist_ok=True)
+        temp_db_path = Path(tempfile.mkdtemp(prefix="seekdb-mp-", dir=SEEKDB_TEST_DATA_ROOT))
         client_config = {"mode": "embedded", "path": str(temp_db_path), "database": database}
     elif mode == "server":
         client_config = {
@@ -512,16 +515,16 @@ def _build_client_config(mode: str) -> tuple[dict[str, Any], Path | None]:
 
     admin = _make_admin_client(client_config)
     admin.create_database(database)
-    del admin
-    gc.collect()
-    return client_config, temp_db_path
+    return client_config, temp_db_path, admin
 
 
 @pytest.fixture
 def multiprocess_db(_mode):
     """Multiprocess db."""
-    client_config, temp_db_path = _build_client_config(_mode)
+    client_config, temp_db_path, admin = _build_client_config(_mode)
     yield client_config
+    with contextlib.suppress(Exception):
+        admin.close()
     if temp_db_path is not None:
         with contextlib.suppress(Exception):
             shutil.rmtree(temp_db_path, ignore_errors=True)
@@ -545,6 +548,8 @@ def crud_collection(multiprocess_db):
 
     with contextlib.suppress(Exception):
         client.delete_collection(collection_name)
+    with contextlib.suppress(Exception):
+        client.close()
 
 
 def _seed_collection_rows(
