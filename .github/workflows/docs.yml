@@ -8,6 +8,8 @@ on:
       - 'src/**'
       - 'docs/**'
       - 'pyproject.toml'
+      - 'uv.lock'
+      - '.github/actions/setup-python-env/action.yml'
       - '.github/workflows/docs.yml'
   workflow_dispatch:
     inputs:
@@ -28,20 +30,22 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Check out code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.event.inputs.branch || github.ref }}
 
       - name: Set up environment
         uses: ./.github/actions/setup-python-env
         with:
-          python-version: '3.11'
+          python-version: '3.12'
+          dependency-group: docs
 
       - name: Build documentation
         run: |
-          uv run sphinx-build -b html docs docs/_build/html
+          uv run --no-sync sphinx-build -W --keep-going -b html docs docs/_build/html
 
       - name: Setup Pages
         uses: actions/configure-pages@v6

@@ -8,7 +8,6 @@ Main Package
 
 .. automodule:: pyseekdb
    :members:
-   :undoc-members:
    :show-inheritance:
 
 Embedding Functions

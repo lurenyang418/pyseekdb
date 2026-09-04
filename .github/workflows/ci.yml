@@ -15,37 +15,52 @@ on:
 jobs:
   quality:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Check out code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up environment
         uses: ./.github/actions/setup-python-env
         with:
           python-version: '3.11'
+          dependency-group: dev
 
-      - name: Cache prek
-        uses: actions/cache@v5
-        with:
-          path: ~/.cache/prek
-          key: prek-${{ hashFiles('.pre-commit-config.yaml') }}
+      - name: Check GitHub Actions workflows
+        uses: raven-actions/actionlint@v2
 
       - name: Run checks
-        run: make check
+        run: |
+          set -euo pipefail
+          uv lock --locked
+          uv run ruff check .
+          uv run ruff format --check .
+
+          if git grep -nI -E '^(<<<<<<<|=======|>>>>>>>)($|[[:space:]])' -- .; then
+            echo "Merge conflict marker found"
+            exit 1
+          fi
+
+          if git grep -nI -E '[[:blank:]]$' -- .; then
+            echo "Trailing whitespace found"
+            exit 1
+          fi
 
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Check out code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up environment
         uses: ./.github/actions/setup-python-env
         with:
           python-version: '3.11'
+          dependency-group: none
 
       - name: Build package
-        run: make build
+        run: uv build
 
       - name: Verify build artifacts
         run: |
@@ -62,18 +77,20 @@ jobs:
 
   fast-test:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         python-version: ['3.11', '3.14']
     steps:
       - name: Check out code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up environment
         uses: ./.github/actions/setup-python-env
         with:
           python-version: ${{ matrix.python-version }}
+          dependency-group: dev
 
       - name: Run unit tests
         run: |
@@ -82,9 +99,7 @@ jobs:
           else
             log_level=INFO
           fi
-          set -o pipefail
-          uv run pytest tests/unit_tests/ -v --log-cli-level=${log_level} | tee pytest.log
-          bash .github/scripts/check-pytest-summary.sh pytest.log
+          uv run pytest tests/unit_tests/ -v --log-cli-level=${log_level}
 
       - name: Run no-server integration tests
         run: |
@@ -93,13 +108,12 @@ jobs:
           else
             log_level=INFO
           fi
-          set -o pipefail
           uv run pytest tests/integration_tests/ -v --log-cli-level=${log_level} \
-            -k "not server and not oceanbase" | tee pytest.log
-          bash .github/scripts/check-pytest-summary.sh pytest.log
+            -k "not server and not oceanbase"
 
   integration-test:
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     strategy:
       fail-fast: false  # Allow other jobs to continue if one fails
       matrix:
@@ -119,12 +133,13 @@ jobs:
           swap-storage: true
 
       - name: Check out code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up environment
         uses: ./.github/actions/setup-python-env
         with:
           python-version: '3.11'
+          dependency-group: dev
 
       - name: Start OceanBase container
         if: matrix.test_mode == 'oceanbase'
@@ -176,7 +191,5 @@ jobs:
           else
             log_level=INFO
           fi
-          set -o pipefail
           uv run pytest tests/integration_tests/ -v --log-cli-level=${log_level} \
-            -k "${{ matrix.test_mode }}" | tee pytest.log
-          bash .github/scripts/check-pytest-summary.sh pytest.log
+            -k "${{ matrix.test_mode }}"

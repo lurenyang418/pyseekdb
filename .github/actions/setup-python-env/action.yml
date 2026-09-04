@@ -9,22 +9,43 @@ inputs:
   uv-version:
     description: "uv version to use"
     required: true
-    default: "0.9.22"
+    default: "0.12.9"
+  dependency-group:
+    description: "Dependency group to install: dev, docs, none, or all"
+    required: false
+    default: "dev"
 
 runs:
   using: "composite"
   steps:
-    - uses: actions/setup-python@v6
+    - uses: actions/setup-python@v7
       with:
         python-version: ${{ inputs.python-version }}
 
     - name: Install uv
-      uses: astral-sh/setup-uv@v9
+      uses: astral-sh/setup-uv@v10
       with:
         version: ${{ inputs.uv-version }}
         enable-cache: "true"
         cache-suffix: ${{ inputs.python-version }}
 
     - name: Install dependencies
-      run: uv sync --all-groups --frozen
+      run: |
+        case "${{ inputs.dependency-group }}" in
+          all)
+            uv sync --all-groups --frozen
+            ;;
+          none)
+            uv sync --no-default-groups --frozen
+            ;;
+          dev)
+            uv sync --group dev --no-group docs --frozen
+            ;;
+          docs)
+            uv sync --group docs --no-group dev --frozen
+            ;;
+          *)
+            uv sync --group "${{ inputs.dependency-group }}" --no-group dev --frozen
+            ;;
+        esac
       shell: bash

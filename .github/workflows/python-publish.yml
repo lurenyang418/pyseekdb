@@ -19,27 +19,48 @@ jobs:
   release-build:
 
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
 
     - name: Set up environment
       uses: ./.github/actions/setup-python-env
       with:
         python-version: '3.11'
+        dependency-group: none
 
     - name: Build package
+      env:
+        RELEASE_TAG: ${{ github.event.release.tag_name }}
       run: |
+        set -euo pipefail
+        project_version="$(uv run --no-sync python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+        release_version="${RELEASE_TAG#v}"
+        test "${release_version}" = "${project_version}"
         uv build
 
-    - name: upload windows dists
+    - name: Verify release distributions
+      run: |
+        set -euo pipefail
+        shopt -s nullglob
+        sdists=(dist/*.tar.gz)
+        wheels=(dist/*.whl)
+        test "${#sdists[@]}" -eq 1
+        test "${#wheels[@]}" -eq 1
+        uv run --isolated --no-project --with "${wheels[0]}" \
+          python -c 'import pyseekdb; print(pyseekdb.__version__)'
+
+    - name: Upload release distributions
       uses: actions/upload-artifact@v7
       with:
         name: release-dists
         path: dist/
+        if-no-files-found: error
 
   pypi-publish:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     needs:
       - release-build
     permissions:

@@ -22,6 +22,7 @@ version = release
 # Extensions
 extensions = [
     "sphinx.ext.autodoc",
+    "sphinx.ext.autosummary",
     "sphinx.ext.viewcode",
     "sphinx.ext.napoleon",
     "myst_parser",
@@ -36,6 +37,8 @@ autodoc_default_options = {
     "members": True,
     "show-inheritance": True,
 }
+autodoc_member_order = "bysource"
+autosummary_generate = True
 
 autodoc_mock_imports = [
     "pymysql",
@@ -47,7 +50,7 @@ master_doc = "index"
 exclude_patterns = ["_build"]
 
 # HTML theme
-html_theme = "sphinx_rtd_theme"
+html_theme = "furo"
 html_static_path = ["_static"]
 html_css_files = [
     "custom.css",

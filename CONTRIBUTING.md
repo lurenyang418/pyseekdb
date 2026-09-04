@@ -6,11 +6,11 @@ instructions.
 ## Development
 
 - Use Python 3.11+.
-- This repo uses `uv`. You can override the binary via `UV=...`.
+- Use uv 0.12.9 or newer within the 0.12 release line.
 
 This project uses [uv](https://docs.astral.sh/uv/) as the package manager with
-[hatchling](https://hatch.pypa.io/) as the build backend. All common development
-tasks are unified through the `Makefile`.
+[hatchling](https://hatch.pypa.io/) as the build backend. Common development
+commands are run directly through `uv`.
 
 ### Prerequisites
 
@@ -34,24 +34,28 @@ pip install uv
 git clone https://github.com/oceanbase/pyseekdb.git
 cd pyseekdb
 
-# Install dependencies (all groups)
-make install
+# Install development dependencies
+uv sync --group dev
 ```
 
-## Make Targets
+## Common Commands
 
 ```bash
-make help                      # Show all available targets
-make install                   # Install dependencies
-make test                      # Run unit tests
-make docs                      # Build documentation
-make build                     # Build the package
-make clean                     # Clean build artifacts
+uv lock --locked               # Verify the lock file is up to date
+uv run ruff check .            # Run lint checks
+uv run ruff format --check .   # Verify formatting
+uv run pytest tests/unit_tests/ -v --log-cli-level=INFO
+uv sync --group dev --group docs # Install documentation dependencies too
+uv run --group docs sphinx-build -W --keep-going -b html docs docs/_build/html
+uv build                       # Build the package
 ```
+
+The documentation toolchain requires Python 3.12 or newer. The package itself
+continues to support Python 3.11.
 
 ## Build Artifacts
 
-After running `make build`, the distribution files will be in the `dist/` directory:
+After running `uv build`, the distribution files will be in the `dist/` directory:
 - `pyseekdb-<version>.tar.gz` - Source distribution
 - `pyseekdb-<version>-py3-none-any.whl` - Wheel distribution
 
@@ -59,7 +63,7 @@ After running `make build`, the distribution files will be in the `dist/` direct
 
 ```bash
 # Run unit tests
-make test
+uv run pytest tests/unit_tests/ -v --log-cli-level=INFO
 
 # Run specific tests with uv run
 uv run pytest tests/integration_tests/ -v -k "server"     # server mode (requires seekdb server)
