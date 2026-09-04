@@ -2,16 +2,19 @@
 Official example test case using db_client fixture
 Verifies the documented quick-start workflow.
 
-The scenario mirrors `pyseekdb/examples/official_example.py` and covers:
-1. Creating a default client (embedded/server/OceanBase, configurable by env vars)
+The scenario covers:
+1. Creating a default client (server/OceanBase, configurable by env vars)
 2. Creating a collection via get_or_create_collection
-3. Upserting only documents/metadatas/ids (relying on default embedding function)
+3. Upserting only documents/metadatas/ids (relying on a registered EmbeddingFunction)
 4. Querying with query_texts + metadata filter + document filter
 """
 
 import time
 
 import pytest
+
+import pyseekdb
+from tests.stubs import StubEmbeddingFunction
 
 PRODUCT_DOCUMENTS = [
     "Laptop Pro with 16GB RAM, 512GB SSD, and high-speed processor",
@@ -89,10 +92,13 @@ class TestOfficialExample:
         """
         Official example using client (automatic mode selection).
 
-        Automatically runs for: embedded, server, oceanbase
+        Automatically runs for: server, oceanbase
         """
         collection_name = f"official_example_{int(time.time() * 1000)}"
-        collection = db_client.get_or_create_collection(name=collection_name)
+        collection = db_client.get_or_create_collection(
+            name=collection_name,
+            schema=pyseekdb.Schema(embedding_function=StubEmbeddingFunction(dimension=384)),
+        )
 
         # Run the official example workflow
         _run_official_example(collection)

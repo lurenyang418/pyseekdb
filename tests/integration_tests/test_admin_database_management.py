@@ -1,6 +1,6 @@
 """
 AdminClient database management tests using admin_client fixture
-Testing all database CRUD operations for all three modes
+Testing all database CRUD operations for server and oceanbase modes
 """
 
 import contextlib
@@ -22,19 +22,14 @@ class TestAdminDatabaseManagement:
         - delete_database: Delete the test database
         - Verification: Ensure database is deleted
 
-        Automatically runs for: embedded, server, oceanbase
+        Automatically runs for: server, oceanbase
         """
         # Verify admin client is properly initialized
         assert admin_client is not None
         assert hasattr(admin_client, "_server")
 
         # Determine expected tenant based on client type
-        server_mode = getattr(admin_client._server, "mode", "")
-        server_class_name = admin_client._server.__class__.__name__
-        if server_mode == "SeekdbEmbeddedClient" or server_class_name == "SeekdbEmbeddedClient":
-            expected_tenant = None
-            test_db_name = "test_embedded_db"
-        elif admin_client._server.tenant == "sys":
+        if admin_client._server.tenant == "sys":
             expected_tenant = "sys"
             test_db_name = "test_server_db"
         else:

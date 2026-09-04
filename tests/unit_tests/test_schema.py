@@ -12,6 +12,12 @@ from pyseekdb.client.configuration import (
     SparseVectorIndexConfig,
     VectorIndexConfig,
 )
+from pyseekdb.client.embedding_function import (
+    Documents as EmbeddingDocuments,
+)
+from pyseekdb.client.embedding_function import (
+    EmbeddingFunction,
+)
 from pyseekdb.client.schema import Schema
 from pyseekdb.client.sparse_embedding_function import (
     Documents,
@@ -19,6 +25,29 @@ from pyseekdb.client.sparse_embedding_function import (
     SparseVector,
     SparseVectors,
 )
+
+
+class _FakeDenseEF(EmbeddingFunction):
+    """Stub dense embedding function used by Schema construction tests."""
+
+    def __call__(self, documents: EmbeddingDocuments):
+        docs = documents if isinstance(documents, list) else [documents]
+        return [[0.0] * 4 for _ in docs]
+
+    def get_config(self) -> dict[str, Any]:
+        return {}
+
+    @staticmethod
+    def build_from_config(config: dict[str, Any]) -> "_FakeDenseEF":
+        return _FakeDenseEF()
+
+    @staticmethod
+    def name() -> str:
+        return "fake_dense"
+
+    @property
+    def dimension(self) -> int:
+        return 4
 
 
 class _FakeSparseEF(SparseEmbeddingFunction):
@@ -55,13 +84,23 @@ class TestSchemaInit:
         assert schema.fulltext_index is None
 
     def test_with_vector_index_config(self):
-        vic = VectorIndexConfig(hnsw=HNSWConfiguration(dimension=128))
+        vic = VectorIndexConfig(hnsw=HNSWConfiguration(dimension=128), embedding_function=_FakeDenseEF())
         schema = Schema(vector_index=vic)
         assert schema.vector_index is vic
 
+    def test_embedding_function_is_attached_to_prebuilt_vector_index_config(self):
+        vic = VectorIndexConfig(hnsw=HNSWConfiguration(dimension=4))
+        ef = _FakeDenseEF()
+
+        schema = Schema(vector_index=vic, embedding_function=ef)
+
+        assert schema.vector_index is not vic
+        assert schema.vector_index.embedding_function is ef
+        assert vic.embedding_function is None
+
     def test_with_hnsw_configuration(self):
         hnsw = HNSWConfiguration(dimension=256, distance="cosine")
-        schema = Schema(vector_index=hnsw)
+        schema = Schema(vector_index=hnsw, embedding_function=_FakeDenseEF())
         assert isinstance(schema.vector_index, VectorIndexConfig)
         assert schema.vector_index.hnsw is hnsw
 
@@ -89,6 +128,7 @@ class TestSchemaInit:
         fulltext = FulltextIndexConfig(analyzer="ik")
         schema = Schema(
             vector_index=hnsw,
+            embedding_function=_FakeDenseEF(),
             sparse_vector_index=sparse,
             fulltext_index=fulltext,
         )
@@ -102,14 +142,23 @@ class TestSchemaCreateIndex:
 
     def test_create_index_hnsw(self):
         hnsw = HNSWConfiguration(dimension=128)
-        schema = Schema().create_index(hnsw)
+        schema = Schema().create_index(hnsw, embedding_function=_FakeDenseEF())
         assert isinstance(schema, Schema)
         assert schema.vector_index.hnsw is hnsw
 
     def test_create_index_vector_index_config(self):
-        vic = VectorIndexConfig(hnsw=HNSWConfiguration(dimension=64))
+        vic = VectorIndexConfig(hnsw=HNSWConfiguration(dimension=64), embedding_function=_FakeDenseEF())
         schema = Schema().create_index(vic)
         assert schema.vector_index is vic
+
+    def test_create_index_attaches_embedding_function_to_prebuilt_config(self):
+        vic = VectorIndexConfig(hnsw=HNSWConfiguration(dimension=4))
+        ef = _FakeDenseEF()
+
+        schema = Schema().create_index(vic, embedding_function=ef)
+
+        assert schema.vector_index.embedding_function is ef
+        assert vic.embedding_function is None
 
     def test_create_index_sparse(self):
         sparse = _make_sparse_config()
@@ -130,7 +179,7 @@ class TestSchemaCreateIndex:
         sparse = _make_sparse_config()
         ft = FulltextIndexConfig(analyzer="space")
 
-        schema = Schema().create_index(hnsw).create_index(sparse).create_index(ft)
+        schema = Schema().create_index(hnsw, embedding_function=_FakeDenseEF()).create_index(sparse).create_index(ft)
 
         assert schema.vector_index.hnsw is hnsw
         assert schema.sparse_vector_index is sparse

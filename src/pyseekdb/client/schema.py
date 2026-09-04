@@ -4,22 +4,10 @@ Schema and index configuration for collection creation.
 The Schema class provides fine-grained control over index configuration,
 including dense vector index (HNSW), sparse vector index, and fulltext index.
 
-Schema replaces the simpler Configuration approach while maintaining backward
-compatibility. When a Schema is provided to ``create_collection``, the older
-``configuration`` and ``embedding_function`` parameters are ignored.
+Schema is the single configuration object accepted by ``create_collection``.
+Its own ``embedding_function`` parameter can be used to attach a dense embedding
+function.
 
-Example:
-    >>> from pyseekdb import Schema, SparseVectorIndexConfig, VectorIndexConfig
-    >>> from pyseekdb.utils.embedding_functions import BM25EmbeddingFunction
-    >>>
-    >>> schema = Schema(
-    ...     vector_index=VectorIndexConfig(hnsw=HNSWConfiguration(dimension=384, distance="cosine")),
-    ...     sparse_vector_index=SparseVectorIndexConfig(
-    ...         embedding_function=BM25EmbeddingFunction(),
-    ...         source_key=K.DOCUMENT
-    ...     )
-    ... )
-    >>> collection = client.create_collection("my_collection", schema=schema)
 """
 
 from __future__ import annotations
@@ -33,6 +21,7 @@ from .configuration import (
     SparseVectorIndexConfig,
     VectorIndexConfig,
 )
+from .embedding_function import EmbeddingFunction
 
 
 class Schema:
@@ -40,13 +29,11 @@ class Schema:
     Schema configuration for collection creation.
 
     Schema provides fine-grained control over indexes and their parameters.
-    When provided to ``create_collection``, the older ``configuration`` and
-    ``embedding_function`` parameters are ignored.
+    Use Schema's ``embedding_function`` parameter for dense embedding configuration.
 
-    Default behavior:
-    - If ``vector_index`` is not specified, a default HNSW index with L2 distance is used.
-    - If ``fulltext_index`` is not specified, a default fulltext index with IK analyzer is used.
-    - ``sparse_vector_index`` is optional and defaults to None (no sparse index).
+    Standard collections use a 384-dimensional HNSW index with cosine distance
+    when ``vector_index`` is omitted. An omitted ``fulltext_index`` uses the IK
+    analyzer, and ``sparse_vector_index`` is optional.
 
     Args:
         vector_index: HNSW configuration for dense vector index (optional).
@@ -55,37 +42,6 @@ class Schema:
         embedding_function: Dense embedding function (optional). If provided with
             ``vector_index``, this is associated with the dense vector index.
 
-    Example:
-        >>> # Simple schema with sparse vector index
-        >>> schema = Schema(
-        ...     sparse_vector_index=SparseVectorIndexConfig(
-        ...         embedding_function=BM25EmbeddingFunction(),
-        ...         source_key=K.DOCUMENT
-        ...     )
-        ... )
-        >>>
-        >>> # Full schema with all indexes
-        >>> schema = Schema(
-        ...     vector_index=VectorIndexConfig(
-        ...         hnsw=HNSWConfiguration(dimension=768, distance="cosine"),
-        ...         embedding_function=OpenAIEmbeddingFunction(api_key_env="OPENAI_API_KEY")
-        ...     ),
-        ...     sparse_vector_index=SparseVectorIndexConfig(
-        ...         embedding_function=BM25EmbeddingFunction()
-        ...     ),
-        ...     fulltext_index=FulltextIndexConfig(analyzer="ik"),
-        ...
-        ... )
-        >>>
-        >>> # Schema using create_index chaining
-        >>> schema = Schema().create_index(
-        ...     VectorIndexConfig(
-        ...         hnsw=HNSWConfiguration(dimension=768, distance="cosine"),
-        ...         embedding_function=OpenAIEmbeddingFunction(api_key_env="OPENAI_API_KEY")
-        ...     )
-        ... ).create_index(
-        ...     SparseVectorIndexConfig(embedding_function=BM25EmbeddingFunction())
-        ... )
     """
 
     def __init__(
@@ -93,17 +49,24 @@ class Schema:
         vector_index: VectorIndexConfig | HNSWConfiguration | IVFConfiguration | None = None,
         sparse_vector_index: SparseVectorIndexConfig | None = None,
         fulltext_index: FulltextIndexConfig | None = None,
+        embedding_function: EmbeddingFunction | None = None,
     ):
-        """Init."""
+        """Init.
+
+        If ``vector_index`` is given as an ``HNSWConfiguration``/``IVFConfiguration``,
+        ``embedding_function=`` is forwarded to the resulting ``VectorIndexConfig``.
+        When a pre-built ``VectorIndexConfig`` has no embedding function, the same
+        argument attaches one without mutating the caller's configuration object.
+        """
         if isinstance(vector_index, VectorIndexConfig):
-            self.vector_index = vector_index
+            self.vector_index = self._merge_embedding_function(vector_index, embedding_function)
         elif isinstance(vector_index, HNSWConfiguration):
-            self.vector_index = VectorIndexConfig(hnsw=vector_index)
+            self.vector_index = VectorIndexConfig(hnsw=vector_index, embedding_function=embedding_function)
         elif isinstance(vector_index, IVFConfiguration):
-            self.vector_index = VectorIndexConfig(ivf=vector_index)
+            self.vector_index = VectorIndexConfig(ivf=vector_index, embedding_function=embedding_function)
         elif vector_index is None:
-            # Default: will be resolved during create_collection
-            self.vector_index = VectorIndexConfig()
+            # Standard collection creation resolves the default HNSW dimension when no EF is set.
+            self.vector_index = VectorIndexConfig(embedding_function=embedding_function)
         else:
             raise TypeError(
                 f"Unsupported vector index configuration type: {type(vector_index).__name__}. "
@@ -112,18 +75,38 @@ class Schema:
         self.sparse_vector_index = sparse_vector_index
         self.fulltext_index = fulltext_index
 
-    def create_index(self, config: Any) -> Schema:
+    @staticmethod
+    def _merge_embedding_function(
+        config: VectorIndexConfig,
+        embedding_function: EmbeddingFunction | None,
+    ) -> VectorIndexConfig:
+        """Attach a supplied EF to a pre-built vector config without silently discarding it."""
+        if embedding_function is None or config.embedding_function is embedding_function:
+            return config
+        if config.embedding_function is not None:
+            raise ValueError(
+                "VectorIndexConfig already has an embedding function; pass the same instance or omit "
+                "Schema(embedding_function=...)."
+            )
+        return VectorIndexConfig(
+            ivf=config.ivf,
+            hnsw=config.hnsw,
+            embedding_function=embedding_function,
+        )
+
+    def create_index(self, config: Any, embedding_function: EmbeddingFunction | None = None) -> Schema:
         """
         Add an index configuration to this schema.
 
         Supports method chaining for fluent API usage.
 
         Args:
-            config: Index configuration object. Can be:
-                - ``VectorIndexConfig``: configures the dense vector index
-                - ``HNSWConfiguration``: configures the dense vector index with `DefaultEmbeddingFunction`
-                - ``SparseVectorIndexConfig``: configures the sparse vector index
-                - ``FulltextIndexConfig``: configures the fulltext index
+            config: Index configuration object. It may be a
+                ``VectorIndexConfig``, ``HNSWConfiguration``, ``IVFConfiguration``,
+                ``SparseVectorIndexConfig``, or ``FulltextIndexConfig``.
+            embedding_function: Optional dense embedding function forwarded to
+                ``VectorIndexConfig`` for HNSW/IVF configurations, or attached to a
+                pre-built ``VectorIndexConfig`` when it has no EF already.
 
         Returns:
             This Schema instance (for chaining).
@@ -131,19 +114,13 @@ class Schema:
         Raises:
             TypeError: If config is not a recognized index configuration type.
 
-        Example:
-            >>> schema = Schema().create_index(
-            ...     HNSWConfiguration(dimension=384, distance="cosine")
-            ... ).create_index(
-            ...     SparseVectorIndexConfig(embedding_function=BM25EmbeddingFunction())
-            ... )
         """
         if isinstance(config, HNSWConfiguration):
-            self.vector_index = VectorIndexConfig(hnsw=config)
+            self.vector_index = VectorIndexConfig(hnsw=config, embedding_function=embedding_function)
         elif isinstance(config, IVFConfiguration):
-            self.vector_index = VectorIndexConfig(ivf=config)
+            self.vector_index = VectorIndexConfig(ivf=config, embedding_function=embedding_function)
         elif isinstance(config, VectorIndexConfig):
-            self.vector_index = config
+            self.vector_index = self._merge_embedding_function(config, embedding_function)
         elif isinstance(config, SparseVectorIndexConfig):
             self.sparse_vector_index = config
         elif isinstance(config, FulltextIndexConfig):

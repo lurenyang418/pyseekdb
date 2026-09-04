@@ -1,7 +1,7 @@
 [project]
 name = "pyseekdb"
-version = "1.2.0.dev1"
-description = "A unified Python client for seekdb that supports embedded, server, and OceanBase."
+version = "2.0.0"
+description = "Python SDK for seekdb Server and OceanBase Server (pymysql-based). Supports vector, full-text, and hybrid search with a pluggable EmbeddingFunction protocol."
 readme = "README.md"
 license = { text = "Apache-2.0" }
 authors = [{ name = "OceanBase", email = "open_oceanbase@oceanbase.com" }]
@@ -13,32 +13,6 @@ dependencies = [
     "pymysql>=1.1.1",
 ]
 
-[project.optional-dependencies]
-embedded = [
-    "pylibseekdb; sys_platform == \"linux\" or (sys_platform == \"darwin\" and platform_machine == \"arm64\")",
-]
-default-embedding = [
-    "onnxruntime>=1.19.0; python_version < \"3.14\"",
-    "tokenizers>=0.15.0; python_version < \"3.14\"",
-    "httpx; python_version < \"3.14\"",
-    "tqdm; python_version < \"3.14\"",
-    "sentence-transformers; python_version >= \"3.14\"",
-    "numpy>=1.26,!=2.4.0",
-]
-all-embeddings = [
-    "pyseekdb[default-embedding]",
-    "openai",
-    "boto3",
-    "cohere",
-    "voyageai",
-    "jina",
-    "mistralai",
-    "litellm",
-    "google-cloud-aiplatform",
-    "bm25s[full]",
-    "huggingface-hub>=0.26",
-]
-
 [project.urls]
 Homepage = "https://www.seekdb.ai/"
 Repository = "https://github.com/oceanbase/pyseekdb/"
@@ -47,32 +21,26 @@ Repository = "https://github.com/oceanbase/pyseekdb/"
 [dependency-groups]
 dev = [
     "pytest>=8.2.2",
-    "pylint>=3.2.7",
     "sphinx>=8.2.3",
-    "sphinx-multiversion>=0.2.4",
     "sphinx-rtd-theme>=3.0.2",
     "myst-parser>=4.0.1",
     "prek>=0.2.17",
     "ruff>=0.11.5",
 ]
 
-# Optional deps for unit tests. CI uses `uv run --no-sync pytest` so pip-installed deps persist.
-unit-tests = [
-    "bm25s[full]",
-    "openai",
-    "boto3",
-    "litellm",
-    "voyageai",
-    "sentence-transformers>=5.0",
-    "huggingface-hub>=0.26",
+[tool.hatch.build.targets.sdist]
+exclude = [
+    ".claude",
+    ".github",
+    ".pre-commit-config.yaml",
+    "dist",
+    "docs/_build",
+    "tmp",
+    "uv.lock",
 ]
 
-[tool.uv.workspace]
-members = ["demo/rag"]
-
-[tool.pdm.build]
-source-includes = ["docs/", "examples/", "tests/"]
-excludes = ["docs/_build/", "tests/seekdb.db/"]
+[tool.hatch.build.targets.wheel]
+packages = ["src/pyseekdb"]
 
 [tool.pytest.ini_options]
 log_level = "INFO"
@@ -133,5 +101,5 @@ ignore = [
 preview = true
 
 [build-system]
-requires = ["pdm-backend"]
-build-backend = "pdm.backend"
+requires = ["hatchling"]
+build-backend = "hatchling.build"

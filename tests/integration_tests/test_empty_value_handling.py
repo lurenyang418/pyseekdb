@@ -11,7 +11,7 @@ import pyseekdb
 
 
 class TestEmptyValueHandling:
-    """Test empty value handling in upsert operations for all three modes"""
+    """Test empty value handling in upsert operations for server and oceanbase modes"""
 
     def test_empty_value_handling(self, db_client):
         """
@@ -24,11 +24,14 @@ class TestEmptyValueHandling:
         - Empty metadata
         - None values
 
-        Automatically runs for: embedded, server, oceanbase
+        Automatically runs for: server, oceanbase
         """
+        from tests.stubs import StubEmbeddingFunction
+
         collection_name = f"test_empty_values_{int(time.time() * 1000)}"
         collection = db_client.get_or_create_collection(
-            name=collection_name, embedding_function=pyseekdb.DefaultEmbeddingFunction()
+            name=collection_name,
+            schema=pyseekdb.Schema(embedding_function=StubEmbeddingFunction(dimension=384)),
         )
 
         try:

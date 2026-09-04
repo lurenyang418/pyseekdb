@@ -36,6 +36,19 @@ class BaseConnection(ABC):
         """Close the client connection and release owned resources."""
         self._cleanup()
 
+    def ping(self) -> bool:
+        """Return whether the server responds to a lightweight health check."""
+        result = self._execute("SELECT 1 AS pyseekdb_ping")
+        if not result:
+            return False
+
+        row = result[0]
+        if isinstance(row, dict):
+            return row.get("pyseekdb_ping") == 1
+        if isinstance(row, (tuple, list)):
+            return bool(row) and row[0] == 1
+        return False
+
     @abstractmethod
     def _execute(self, sql: str) -> Any:
         """Execute SQL statement (basic functionality)"""
@@ -44,12 +57,6 @@ class BaseConnection(ABC):
     @abstractmethod
     def get_raw_connection(self) -> Any:
         """Get raw connection object"""
-        pass
-
-    @property
-    @abstractmethod
-    def mode(self) -> str:
-        """Return client mode (e.g., 'SeekdbEmbeddedClient', 'RemoteServerClient')"""
         pass
 
     # ==================== Context Manager ====================

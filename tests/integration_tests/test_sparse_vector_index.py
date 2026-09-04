@@ -4,13 +4,9 @@ Integration tests for sparse vector index support.
 Tests create_collection (with Schema + SparseVectorIndexConfig),
 collection.add, collection.update, collection.upsert, and collection.query
 with sparse vector embeddings.
-
-Run with embedded mode:
-    pytest tests/integration_tests/test_sparse_vector_index.py -k embedded -v -s
 """
 
 import contextlib
-import importlib
 import time
 import uuid
 from typing import Any
@@ -31,17 +27,6 @@ from pyseekdb.client.sparse_embedding_function import (
     SparseVectors,
     register_sparse_embedding_function,
 )
-from pyseekdb.utils.embedding_functions.bm25_sparse_embedding_function import BM25SparseEmbeddingFunction
-from pyseekdb.utils.embedding_functions.huggingface_sparse_embedding_function import HuggingFaceSparseEmbeddingFunction
-
-
-def _bm25_available() -> bool:
-    return importlib.util.find_spec("bm25s") is not None
-
-
-def _splade_available() -> bool:
-    return importlib.util.find_spec("sentence_transformers") is not None
-
 
 # ── Fake sparse embedding function for deterministic testing ─────────
 
@@ -103,8 +88,8 @@ def _make_sparse_schema():
             source_key=K.DOCUMENT,
         ),
     )
-    # VectorIndexConfig.__post_init__ forces DefaultEmbeddingFunction;
-    # override to None so create_collection doesn't dimension-check against it.
+    # VectorIndexConfig already accepts an explicit dimension on HNSW, so no
+    # embedding function is required.
     schema.vector_index.embedding_function = None
     return schema
 
@@ -153,13 +138,12 @@ class TestCreateCollectionWithSparseIndex:
             _cleanup_collection(db_client, name)
 
     def test_create_collection_without_sparse(self, db_client):
-        """Create collection without sparse index (backward compatibility)."""
+        """Create collection without a sparse index."""
         name = _unique_name("create_no_sparse")
         try:
             collection = db_client.get_or_create_collection(
                 name=name,
-                configuration=HNSWConfiguration(dimension=DIMENSION, distance="l2"),
-                embedding_function=None,
+                schema=Schema(vector_index=HNSWConfiguration(dimension=DIMENSION, distance="l2")),
             )
             assert collection is not None
             assert collection.sparse_vector_index_config is None
@@ -485,43 +469,15 @@ class TestCollectionQueryWithSparse:
         finally:
             _cleanup_collection(db_client, name)
 
-    @pytest.mark.skipif(not _bm25_available(), reason="bm25s not installed")
+    @pytest.mark.skipif(True, reason="BM25 sparse embedding function was removed in pyseekdb 2.0")
     def test_sparse_query_with_bm25(self, db_client):
-        """Query using BM25 sparse vector."""
-        name = _unique_name("query_sparse_bm25")
-        try:
-            collection, _ids, _ = self._setup_with_data(db_client, name, sparse_ef=BM25SparseEmbeddingFunction())
-            results = collection.query(
-                query_texts=["machine learning"],
-                query_key=K.SPARSE_EMBEDDING,
-                n_results=3,
-            )
-            assert results is not None
-            assert "ids" in results
-            assert len(results["ids"]) == 1
-            assert len(results["ids"][0]) > 0
-            print(f"   Sparse BM25 query returned {len(results['ids'][0])} results: OK")
-        finally:
-            _cleanup_collection(db_client, name)
+        """Query using BM25 sparse vector. (skipped: BM25SparseEmbeddingFunction removed in 2.0)"""
+        pytest.skip("BM25SparseEmbeddingFunction removed in pyseekdb 2.0")
 
-    @pytest.mark.skipif(not _splade_available(), reason="sentence_transformers not installed")
+    @pytest.mark.skipif(True, reason="SPLADE sparse embedding function was removed in pyseekdb 2.0")
     def test_sparse_query_with_splade(self, db_client):
-        """Query using SPLADE sparse vector."""
-        name = _unique_name("query_sparse_splade")
-        try:
-            collection, _ids, _ = self._setup_with_data(db_client, name, sparse_ef=HuggingFaceSparseEmbeddingFunction())
-            results = collection.query(
-                query_texts=["machine learning"],
-                query_key=K.SPARSE_EMBEDDING,
-                n_results=3,
-            )
-            assert results is not None
-            assert "ids" in results
-            assert len(results["ids"]) == 1
-            assert len(results["ids"][0]) > 0
-            print(f"   Sparse SPLADE query returned {len(results['ids'][0])} results: OK")
-        finally:
-            _cleanup_collection(db_client, name)
+        """Query using SPLADE sparse vector. (skipped: HuggingFaceSparseEmbeddingFunction removed in 2.0)"""
+        pytest.skip("HuggingFaceSparseEmbeddingFunction removed in pyseekdb 2.0")
 
 
 class TestSparseWithMetadataSource:

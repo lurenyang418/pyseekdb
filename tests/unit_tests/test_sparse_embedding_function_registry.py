@@ -240,6 +240,12 @@ class TestSparseEmbeddingFunctionRegistry:
         second = SparseEmbeddingFunctionRegistry._registry.copy()
         assert first == second
 
+    def test_initialization_registers_no_builtins(self):
+        """Since pyseekdb 2.0 no built-in sparse implementations are auto-registered."""
+        SparseEmbeddingFunctionRegistry._initialize()
+        assert SparseEmbeddingFunctionRegistry._initialized is True
+        assert SparseEmbeddingFunctionRegistry.list_registered() == []
+
 
 # ── Decorator tests ──────────────────────────────────────────────────
 

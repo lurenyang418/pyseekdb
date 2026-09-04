@@ -9,7 +9,7 @@ instructions.
 - This repo uses `uv`. You can override the binary via `UV=...`.
 
 This project uses [uv](https://docs.astral.sh/uv/) as the package manager with
-[pdm-backend](https://pdm-backend.fming.dev/) as the build backend. All common development
+[hatchling](https://hatch.pypa.io/) as the build backend. All common development
 tasks are unified through the `Makefile`.
 
 ### Prerequisites
@@ -44,9 +44,7 @@ make install
 make help                      # Show all available targets
 make install                   # Install dependencies
 make test                      # Run unit tests
-make test-integration-embedded # Run embedded integration tests
 make docs                      # Build documentation
-make demo                      # Run RAG demo
 make build                     # Build the package
 make clean                     # Clean build artifacts
 ```
@@ -62,9 +60,6 @@ After running `make build`, the distribution files will be in the `dist/` direct
 ```bash
 # Run unit tests
 make test
-
-# Run embedded integration tests
-make test-integration-embedded
 
 # Run specific tests with uv run
 uv run pytest tests/integration_tests/ -v -k "server"     # server mode (requires seekdb server)

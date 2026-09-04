@@ -66,8 +66,7 @@ class TestGetOrCreateCollectionConcurrencyOceanBase:
                 barrier.wait(timeout=30)
                 coll = client.get_or_create_collection(
                     collection_name,
-                    configuration=pyseekdb.HNSWConfiguration(dimension=3, distance="cosine"),
-                    embedding_function=None,
+                    schema=pyseekdb.Schema(vector_index=pyseekdb.HNSWConfiguration(dimension=3, distance="cosine")),
                 )
                 results[thread_id] = {
                     "collection_id": str(coll.id),

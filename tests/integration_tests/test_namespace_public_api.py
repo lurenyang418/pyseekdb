@@ -47,8 +47,7 @@ class TestNamespacePublicAPIIntegration:
         name = f"test_ns_mode_{int(time.time() * 1000)}"
         oceanbase_client.create_collection(
             name=name,
-            configuration=HNSWConfiguration(dimension=3),
-            embedding_function=None,
+            schema=Schema(vector_index=HNSWConfiguration(dimension=3)),
         )
         try:
             with pytest.raises(ValueError, match="already exists as a standard collection"):

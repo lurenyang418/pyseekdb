@@ -7,6 +7,8 @@ from typing import ClassVar
 
 import pytest
 
+import pyseekdb
+
 
 class Simple3DEmbeddingFunction:
     """Simple 3D embedding function for testing."""
@@ -43,7 +45,9 @@ class TestLongCollectionName:
         """Test creating and deleting collections with long names."""
         for name in self.LONG_NAMES:
             try:
-                collection = db_client.create_collection(name=name, embedding_function=Simple3DEmbeddingFunction())
+                collection = db_client.create_collection(
+                    name=name, schema=pyseekdb.Schema(embedding_function=Simple3DEmbeddingFunction())
+                )
                 assert collection.name == name
                 assert db_client.has_collection(name=name)
             finally:
@@ -56,7 +60,9 @@ class TestLongCollectionName:
         """Test get_or_create_collection with long names (Known Limitation)."""
         name = "x" * 100
         try:
-            collection = db_client.get_or_create_collection(name=name, embedding_function=Simple3DEmbeddingFunction())
+            collection = db_client.get_or_create_collection(
+                name=name, schema=pyseekdb.Schema(embedding_function=Simple3DEmbeddingFunction())
+            )
             assert collection.name == name
         finally:
             if db_client.has_collection(name=name):
@@ -67,7 +73,9 @@ class TestLongCollectionName:
         for length in [64, 65, 512]:
             name = "z" * length
             try:
-                collection = db_client.create_collection(name=name, embedding_function=Simple3DEmbeddingFunction())
+                collection = db_client.create_collection(
+                    name=name, schema=pyseekdb.Schema(embedding_function=Simple3DEmbeddingFunction())
+                )
                 assert len(collection.name) == length
             finally:
                 if db_client.has_collection(name=name):

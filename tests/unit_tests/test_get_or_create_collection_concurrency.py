@@ -62,7 +62,7 @@ class TestCollectionCatalogInsertRecovery:
 
         client._execute.side_effect = execute_side_effect
 
-        result = BaseClient._create_collection_meta_v2(client, "items", None)
+        result = BaseClient._create_collection_meta(client, "items", None)
 
         assert result["collection_id"] == "existing_id"
         conn.rollback.assert_called_once()
@@ -73,7 +73,7 @@ class TestCollectionCatalogInsertRecovery:
         client = MagicMock(spec=BaseClient)
         client._get_collection_id.return_value = "existing_id"
 
-        result = BaseClient._create_collection_meta_v2(client, "items", None)
+        result = BaseClient._create_collection_meta(client, "items", None)
 
         assert result["collection_id"] == "existing_id"
         insert_calls = [call for call in client._execute.call_args_list if "INSERT INTO" in str(call)]

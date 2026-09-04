@@ -18,35 +18,15 @@ pre-commit: ## Run pre-commit hooks via prek
 	@echo ">> Running pre-commit hooks"
 	@$(UV) run prek run -a
 
-.PHONY: demo
-demo: ## Run RAG demo (Streamlit)
-	@echo ">> Running RAG demo"
-	@$(UV) run --project demo/rag streamlit run demo/rag/seekdb_app.py
-
 .PHONY: test
 test: ## Run unit tests
 	@echo ">> Running unit tests"
 	@$(UV) run pytest tests/unit_tests/ -v --log-cli-level=INFO
 
-.PHONY: test-integration-embedded
-test-integration-embedded: ## Run embedded integration tests
-	@echo ">> Running embedded integration tests"
-	@$(UV) run pytest tests/integration_tests/ -v --log-cli-level=INFO -k embedded
-
 .PHONY: docs
 docs: ## Build documentation (single version)
 	@echo ">> Building documentation"
 	@$(UV) run sphinx-build -b html docs docs/_build/html
-
-.PHONY: docs-multiversion
-docs-multiversion: ## Build multi-version documentation
-	@echo ">> Building multi-version documentation"
-	@bash docs/build_multiversion.sh
-
-.PHONY: docs-serve
-docs-serve: ## Serve documentation with auto-reload
-	@echo ">> Starting documentation server"
-	@$(UV) run sphinx-autobuild docs docs/_build/html --host 127.0.0.1 --port 8000
 
 .PHONY: build
 build: ## Build package
@@ -56,7 +36,7 @@ build: ## Build package
 .PHONY: clean
 clean: ## Clean build and docs artifacts
 	@echo ">> Removing build artifacts"
-	@$(UV) run python -c "import shutil; shutil.rmtree('dist', ignore_errors=True); shutil.rmtree('docs/_build', ignore_errors=True); shutil.rmtree('tests/seekdb.db', ignore_errors=True)"
+	@$(UV) run python -c "import shutil; shutil.rmtree('dist', ignore_errors=True); shutil.rmtree('docs/_build', ignore_errors=True)"
 
 .PHONY: help
 help:

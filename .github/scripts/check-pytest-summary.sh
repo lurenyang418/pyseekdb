@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 
-# Importing pylibseekdb can mask pytest's non-zero process status, so CI must
-# verify the final pytest summary instead. Fail closed if the summary reports
-# failures/errors or does not confirm that at least one test passed.
+# Validate pytest's final summary as a defense-in-depth check: pipe-based test
+# runners can otherwise obscure a non-success outcome. Fail closed if the
+# summary reports failures/errors or does not confirm that at least one test passed.
 set -euo pipefail
 
 pytest_log="${1:-pytest.log}"

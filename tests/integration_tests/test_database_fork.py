@@ -37,7 +37,7 @@ class TestDatabaseFork:
         """
         Test successful fork_database operation.
 
-        Automatically runs for: embedded, server, oceanbase
+        Automatically runs for: server, oceanbase
         Skips if fork_database is not enabled.
         """
         if not self._is_fork_database_enabled(admin_client):
@@ -67,7 +67,7 @@ class TestDatabaseFork:
         """
         Test fork of an empty database (no tables).
 
-        Automatically runs for: embedded, server, oceanbase
+        Automatically runs for: server, oceanbase
         Skips if fork_database is not enabled.
         """
         if not self._is_fork_database_enabled(admin_client):
@@ -93,7 +93,7 @@ class TestDatabaseFork:
         """
         Test that fork preserves database attributes (charset, collation).
 
-        Automatically runs for: embedded, server, oceanbase
+        Automatically runs for: server, oceanbase
         Skips if fork_database is not enabled.
         """
         if not self._is_fork_database_enabled(admin_client):
@@ -121,7 +121,7 @@ class TestDatabaseFork:
         """
         Test that forking to an existing database raises an error.
 
-        Automatically runs for: embedded, server, oceanbase
+        Automatically runs for: server, oceanbase
         Skips if fork_database is not enabled.
         """
         if not self._is_fork_database_enabled(admin_client):
@@ -150,7 +150,7 @@ class TestDatabaseFork:
         Creates a table in source before fork, then verifies that modifications
         to the forked database do not affect the source and vice versa.
 
-        Automatically runs for: embedded, server, oceanbase
+        Automatically runs for: server, oceanbase
         Skips if fork_database is not enabled.
         """
         if not self._is_fork_database_enabled(admin_client):
@@ -188,7 +188,7 @@ class TestDatabaseFork:
         """
         Test that the same source database can be forked multiple times.
 
-        Automatically runs for: embedded, server, oceanbase
+        Automatically runs for: server, oceanbase
         Skips if fork_database is not enabled.
         """
         if not self._is_fork_database_enabled(admin_client):

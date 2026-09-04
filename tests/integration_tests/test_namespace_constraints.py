@@ -13,7 +13,7 @@ import pytest
 from namespace_dml_helpers import NAMESPACE_TEST_PARTITION_COUNT
 
 from pyseekdb import IVFConfiguration
-from pyseekdb.client.client_base import NAMESPACE_MIN_LAKEBASE_VERSION, NAMESPACE_MIN_OB_VERSION
+from pyseekdb.client.client_base import NAMESPACE_MIN_LAKEBASE_VERSION
 from pyseekdb.client.configuration import VectorIndexConfig
 from pyseekdb.client.schema import Schema
 from pyseekdb.client.version import Version
@@ -177,4 +177,4 @@ class TestNamespaceMinVersionConstraint:
 
     def test_min_version_constant(self):
         """Test min version constant."""
-        assert Version("4.6.1.0") == NAMESPACE_MIN_LAKEBASE_VERSION == NAMESPACE_MIN_OB_VERSION
+        assert Version("4.6.1.0") == NAMESPACE_MIN_LAKEBASE_VERSION

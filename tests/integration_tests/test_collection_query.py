@@ -8,7 +8,7 @@ import uuid
 
 import pytest
 
-from pyseekdb import HNSWConfiguration
+from pyseekdb import HNSWConfiguration, Schema
 from pyseekdb.client.query_types import QueryHint
 
 
@@ -87,10 +87,9 @@ class TestCollectionQuery:
 
     def test_collection_query(self, db_client):
         """
-        Test collection.query() with all three client modes.
+        Test collection.query() with all client modes.
 
-        This single test function automatically runs 3 times:
-        - test_collection_query[embedded]
+        This single test function automatically runs 2 times:
         - test_collection_query[server]
         - test_collection_query[oceanbase]
 
@@ -101,10 +100,8 @@ class TestCollectionQuery:
         from pyseekdb import HNSWConfiguration
 
         config = HNSWConfiguration(dimension=3, distance="l2")
-        collection = db_client.get_or_create_collection(
-            name=collection_name, configuration=config, embedding_function=None
-        )
-        # Get actual dimension (may be different from requested due to default embedding function)
+        collection = db_client.get_or_create_collection(name=collection_name, schema=Schema(vector_index=config))
+        # Get actual dimension from the configured dense schema.
         actual_dimension = collection.dimension
 
         # Insert test data
@@ -222,13 +219,14 @@ class TestCollectionQuery:
         - Query with query_timeout hint
         - Query with both hints and filters
 
-        Automatically runs for: embedded, server, oceanbase
+        Automatically runs for: server, oceanbase
         """
         # Create test collection
         collection_name = f"test_query_hint_{int(time.time() * 1000)}"
 
         collection = db_client.create_collection(
-            name=collection_name, configuration=HNSWConfiguration(dimension=3, distance="l2"), embedding_function=None
+            name=collection_name,
+            schema=Schema(vector_index=HNSWConfiguration(dimension=3, distance="l2")),
         )
         dimension = collection.dimension
 

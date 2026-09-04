@@ -1,16 +1,8 @@
 # project
-poetry.lock
-tests/.env
 __pycache__/
 build/
 dist/
 docs/_build/
-
-# tests
-seekdb.db/
-.seekdb-test-data/
-
-# demo
 .env
 .venv
 env/
@@ -18,4 +10,3 @@ venv/
 ENV/
 env.bak/
 venv.bak/
-demo/rag/data/

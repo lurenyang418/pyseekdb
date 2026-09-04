@@ -57,9 +57,9 @@ class TestNamespaceLifecycle:
 
     def test_get_collection_restores_embedding_function(self, db_client):
         """Test get collection restores embedding function."""
-        from pyseekdb import DefaultEmbeddingFunction
+        from tests.stubs import StubEmbeddingFunction
 
-        ef = DefaultEmbeddingFunction()
+        ef = StubEmbeddingFunction(dimension=384)
         name = f"test_ns_ef_{int(time.time() * 1000)}"
         schema = Schema(
             vector_index=VectorIndexConfig(
@@ -283,8 +283,7 @@ class TestNamespaceLifecycle:
         name = f"test_nons_{int(time.time() * 1000)}"
         collection = db_client.create_collection(
             name=name,
-            configuration=pyseekdb.HNSWConfiguration(dimension=3),
-            embedding_function=None,
+            schema=Schema(vector_index=pyseekdb.HNSWConfiguration(dimension=3)),
         )
         try:
             with pytest.raises(ValueError, match="not enabled"):
@@ -389,8 +388,7 @@ class TestNamespaceLifecycle:
         with pytest.raises(ValueError, match="partition_count is only supported"):
             db_client.create_collection(
                 name=name,
-                configuration=pyseekdb.HNSWConfiguration(dimension=3),
-                embedding_function=None,
+                schema=Schema(vector_index=pyseekdb.HNSWConfiguration(dimension=3)),
                 partition_count=4,
             )
         assert not db_client.has_collection(name)

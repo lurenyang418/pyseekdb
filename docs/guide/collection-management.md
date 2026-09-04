@@ -1,181 +1,100 @@
 # 3. Collection (Table) Management
 
-Collections are the primary data structures in pyseekdb, similar to tables in traditional databases. Each collection stores documents with vector embeddings, metadata, and full-text search capabilities.
+Collections are the primary data structures in pyseekdb. Each collection can
+store documents, vector embeddings, metadata, and full-text search indexes.
+
+Since pyseekdb 2.0, collection creation uses one `Schema` object. Embedding
+function implementations are not bundled; provide your own implementation or
+set an explicit vector dimension and pass embeddings directly.
 
 ## 3.1 Creating a Collection
 
 ```python
 import pyseekdb
-from pyseekdb import (
-    DefaultEmbeddingFunction,
-    HNSWConfiguration,
-    Configuration,
-    FulltextIndexConfig
-)
+from pyseekdb import HNSWConfiguration, Schema, VectorIndexConfig
+from your_app.embedding_functions import MyDenseEmbeddingFunction
 
-# Create a client
 client = pyseekdb.Client(host="127.0.0.1", port=2881, database="test")
 
-# Create a collection with default configuration
+# Explicit dimension; callers provide embeddings to add/update/upsert.
 collection = client.create_collection(
-    name="my_collection"
-    # embedding_function defaults to DefaultEmbeddingFunction() (384 dimensions)
+    "my_collection",
+    schema=Schema(vector_index=HNSWConfiguration(dimension=384, distance="cosine")),
 )
 
-# Create a collection with custom embedding function
-# Dimension will be automatically calculated from embedding function
-ef = UserDefinedEmbeddingFunction(model_name='all-MiniLM-L6-v2')
-collection = client.create_collection(
-    name="my_collection",
-    embedding_function=ef
+# Store an embedding function in the schema.
+ef = MyDenseEmbeddingFunction(model_name="all-MiniLM-L6-v2")
+schema = Schema(
+    vector_index=VectorIndexConfig(
+        hnsw=HNSWConfiguration(dimension=384, distance="cosine"),
+        embedding_function=ef,
+    )
 )
-
-# Recommended: Create a collection with Configuration wrapper
-# Using IK parser (default for Chinese text)
-config = Configuration(
-    hnsw=HNSWConfiguration(dimension=384, distance='cosine'),
-    fulltext_config=FulltextIndexConfig(analyzer='ik')
-)
-collection = client.create_collection(
-    name="my_collection",
-    configuration=config,
-    embedding_function=ef
-)
-
-# Recommended: Create a collection with Configuration (only HNSW config, uses default parser)
-config = Configuration(
-    hnsw=HNSWConfiguration(dimension=384, distance='cosine')
-)
-collection = client.create_collection(
-    name="my_collection",
-    configuration=config,
-    embedding_function=ef
-)
-
-# Create a collection with Space parser (for space-separated languages)
-config = Configuration(
-    hnsw=HNSWConfiguration(dimension=384, distance='cosine'),
-    fulltext_config=FulltextIndexConfig(analyzer='space')
-)
-collection = client.create_collection(
-    name="my_collection",
-    configuration=config,
-    embedding_function=ef
-)
-
-# Create a collection with Ngram parser and custom parameters
-config = Configuration(
-    hnsw=HNSWConfiguration(dimension=384, distance='cosine'),
-    fulltext_config=FulltextIndexConfig(analyzer='ngram', properties={'ngram_token_size': 3})
-)
-collection = client.create_collection(
-    name="my_collection",
-    configuration=config,
-    embedding_function=ef
-)
-
-# Create a collection without embedding function (embeddings must be provided manually)
-# Recommended: Use Configuration wrapper
-config = Configuration(
-    hnsw=HNSWConfiguration(dimension=128, distance='cosine')
-)
-collection = client.create_collection(
-    name="my_collection",
-    configuration=config,
-    embedding_function=None  # Explicitly disable embedding function
-)
-
-# Get or create collection (creates if doesn't exist)
-collection = client.get_or_create_collection(
-    name="my_collection",
-)
+collection = client.create_collection("my_collection", schema=schema)
 ```
 
-**Parameters:**
-- `name` (str): Collection name (required). Must be non-empty, use only letters/digits/underscore (`[a-zA-Z0-9_]`), and be at most 512 characters.
-- `configuration` (Configuration, HNSWConfiguration, or None, optional): Index configuration
-  - **Recommended:** `Configuration` - Wrapper class that can include both `HNSWConfiguration` and `FulltextIndexConfig`
-    - Use `Configuration(hnsw=HNSWConfiguration(...))` even when only vector index config is needed
-    - Allows easy addition of fulltext index config later
-  - `HNSWConfiguration`: Vector index configuration with `dimension` and `distance` metric (backward compatibility)
-  - If not provided, uses default (dimension=384, distance='cosine', analyzer='ik')
-  - If set to `None`, dimension will be calculated from `embedding_function`
-- `embedding_function` (EmbeddingFunction, optional): Function to convert documents to embeddings
-  - If not provided, uses `DefaultEmbeddingFunction()` (384 dimensions)
-  - If set to `None`, collection will not have an embedding function
-  - If provided, the dimension will be automatically calculated and validated against `configuration.dimension`
+The schema can also configure a full-text parser:
 
-**Fulltext Index Options:**
-- `'ik'` (default): IK parser for Chinese text segmentation
-- `'space'`: Space-separated tokenizer for languages like English
-- `'ngram'`: N-gram tokenizer
-- `'ngram2'`: 2-gram tokenizer
-- `'beng'`: Bengali text parser
+```python
+from pyseekdb import FulltextIndexConfig, HNSWConfiguration, Schema, VectorIndexConfig
 
-For more information about parser, please refer to [create_index section tokenizer_option](https://www.oceanbase.com/docs/common-oceanbase-database-cn-1000000004479548#tokenizer_option).
+schema = Schema(
+    vector_index=VectorIndexConfig(
+        hnsw=HNSWConfiguration(dimension=384, distance="cosine"),
+    ),
+    fulltext_index=FulltextIndexConfig(analyzer="ik"),
+)
+collection = client.create_collection("my_collection", schema=schema)
+```
 
-**Note:** When `embedding_function` is provided, the system will automatically calculate the vector dimension by calling the function. If `configuration.dimension` is also provided, it must match the embedding function's dimension, otherwise a `ValueError` will be raised.
+Supported analyzers include `ik` (the default), `space`, `ngram`, `ngram2`,
+and `beng`. Analyzer-specific options go in
+`FulltextIndexConfig.properties`.
+
+`get_or_create_collection` uses the same `schema` parameter:
+
+```python
+collection = client.get_or_create_collection("my_collection", schema=schema)
+```
+
+If `schema` is omitted for a standard collection, pyseekdb uses the default
+384-dimensional HNSW schema. Namespace-enabled collections require an
+explicit IVF schema; see [Namespace Collections](namespace.md).
 
 ## 3.2 Getting a Collection
 
 ```python
-# Get an existing collection (uses default embedding function if collection doesn't have one)
 collection = client.get_collection("my_collection")
 
-# Get collection with specific embedding function
-ef = DefaultEmbeddingFunction(model_name='all-MiniLM-L6-v2')
-collection = client.get_collection("my_collection", embedding_function=ef)
-
-# Get collection without embedding function
-collection = client.get_collection("my_collection", embedding_function=None)
-
-# Check if collection exists
 if client.has_collection("my_collection"):
     collection = client.get_collection("my_collection")
+
+# A retrieval-time embedding function is useful when the function is not
+# persisted in the collection metadata.
+collection = client.get_collection("my_collection", embedding_function=ef)
 ```
 
-**Parameters:**
-- `name` (str): Collection name (required)
-- `embedding_function` (EmbeddingFunction, optional): Embedding function to use for this collection
-  - If not provided, uses `DefaultEmbeddingFunction()` by default
-  - If set to `None`, collection will not have an embedding function
-  - **Important:** The embedding function set here will be used for all operations on this collection (add, upsert, update, query, hybrid_search) when documents/texts are provided without embeddings
+The `embedding_function` argument to `get_collection` only supplies the
+runtime function used by collection operations; creation settings belong in
+`Schema`.
 
-## 3.3 Listing Collections
+## 3.3 Listing and Deleting Collections
 
 ```python
-# List all collections
-collections = client.list_collections()
-for coll in collections:
-    print(f"Collection: {coll.name}, Dimension: {coll.dimension}")
+for collection in client.list_collections():
+    print(collection.name, collection.dimension)
 
-# Count collections in database
-collection_count = client.count_collection()
-print(f"Database has {collection_count} collections")
-```
-
-## 3.4 Deleting a Collection
-
-```python
-# Delete a collection
+print(client.count_collection())
 client.delete_collection("my_collection")
 ```
 
-## 3.5 Collection Properties
+## 3.4 Collection Properties
 
-Each `Collection` object has the following properties:
+Each `Collection` object exposes:
 
-- `name` (str): Collection name
-- `id` (str, optional): Collection unique identifier
-- `dimension` (int, optional): Vector dimension
-- `embedding_function` (EmbeddingFunction, optional): Embedding function associated with this collection
-- `distance` (str): Distance metric used by the index (e.g., 'l2', 'cosine', 'inner_product')
-- `metadata` (dict): Collection metadata
-
-**Accessing Embedding Function:**
-```python
-collection = client.get_collection("my_collection")
-if collection.embedding_function is not None:
-    print(f"Collection uses embedding function: {collection.embedding_function}")
-    print(f"Embedding dimension: {collection.embedding_function.dimension}")
-```
+- `name`: Collection name
+- `id`: Unique collection identifier
+- `dimension`: Dense vector dimension, if configured
+- `embedding_function`: Runtime embedding function, if available
+- `distance`: Distance metric used by the vector index
+- `metadata`: Collection metadata

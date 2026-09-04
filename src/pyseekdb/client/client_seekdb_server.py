@@ -4,14 +4,12 @@ Supports both seekdb Server and OceanBase Server
 """
 
 import logging
-from collections.abc import Sequence
 
 import pymysql
 from pymysql.cursors import DictCursor
 
 from .admin_client import DEFAULT_TENANT
 from .client_base import BaseClient
-from .database import Database
 from .kernel_errors import namespace_kernel_error_guard
 
 logger = logging.getLogger(__name__)
@@ -102,11 +100,6 @@ class RemoteServerClient(BaseClient):
         """Get raw connection object"""
         return self._ensure_connection()
 
-    @property
-    def mode(self) -> str:
-        """Return the client mode identifier."""
-        return "RemoteServerClient"
-
     # ==================== Collection Management (framework) ====================
 
     # create_collection is inherited from BaseClient - no override needed
@@ -132,72 +125,6 @@ class RemoteServerClient(BaseClient):
     # -------------------- Collection Info --------------------
 
     # _collection_count is inherited from BaseClient - no override needed
-
-    # ==================== Database Management ====================
-
-    def create_database(self, name: str, tenant: str = DEFAULT_TENANT) -> None:
-        """
-        Create database (remote server has tenant concept, uses client's tenant)
-
-        Args:
-            name: database name
-            tenant: tenant name (if different from client tenant, will use client tenant)
-
-        Note:
-            Remote server has multi-tenant architecture. Database is scoped to client's tenant.
-        """
-        return super().create_database(name=name, tenant=tenant)
-
-    def get_database(self, name: str, tenant: str = DEFAULT_TENANT) -> Database:
-        """
-        Get database object (remote server has tenant concept, uses client's tenant)
-
-        Args:
-            name: database name
-            tenant: tenant name (if different from client tenant, will use client tenant)
-
-        Returns:
-            Database object with tenant information
-
-        Note:
-            Remote server has multi-tenant architecture. Database is scoped to client's tenant.
-        """
-        return super().get_database(name=name, tenant=tenant)
-
-    def delete_database(self, name: str, tenant: str = DEFAULT_TENANT) -> None:
-        """
-        Delete database (remote server has tenant concept, uses client's tenant)
-
-        Args:
-            name: database name
-            tenant: tenant name (if different from client tenant, will use client tenant)
-
-        Note:
-            Remote server has multi-tenant architecture. Database is scoped to client's tenant.
-        """
-        return super().delete_database(name=name, tenant=tenant)
-
-    def list_databases(
-        self,
-        limit: int | None = None,
-        offset: int | None = None,
-        tenant: str = DEFAULT_TENANT,
-    ) -> Sequence[Database]:
-        """
-        List all databases (remote server has tenant concept, uses client's tenant)
-
-        Args:
-            limit: maximum number of results to return
-            offset: number of results to skip
-            tenant: tenant name (if different from client tenant, will use client tenant)
-
-        Returns:
-            Sequence of Database objects with tenant information
-
-        Note:
-            Remote server has multi-tenant architecture. Lists databases in client's tenant.
-        """
-        return super().list_databases(limit=limit, offset=offset, tenant=tenant)
 
     def _database_tenant(self, tenant: str) -> str | None:
         """Return the tenant associated with the active database."""

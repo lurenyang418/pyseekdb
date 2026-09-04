@@ -11,14 +11,13 @@ on:
       - develop
     paths-ignore:
       - 'README.md'
-      - 'demo/**'
 
 jobs:
   quality:
     runs-on: ubuntu-latest
     steps:
       - name: Check out code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up environment
         uses: ./.github/actions/setup-python-env
@@ -26,7 +25,7 @@ jobs:
           python-version: '3.11'
 
       - name: Cache prek
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cache/prek
           key: prek-${{ hashFiles('.pre-commit-config.yaml') }}
@@ -38,7 +37,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up environment
         uses: ./.github/actions/setup-python-env
@@ -56,12 +55,12 @@ jobs:
           test -f dist/*.whl || (echo "Wheel not found" && exit 1)
 
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dist
           path: dist/
 
-  unit-test:
+  fast-test:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -69,7 +68,7 @@ jobs:
         python-version: ['3.11', '3.14']
     steps:
       - name: Check out code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up environment
         uses: ./.github/actions/setup-python-env
@@ -87,7 +86,7 @@ jobs:
           uv run pytest tests/unit_tests/ -v --log-cli-level=${log_level} | tee pytest.log
           bash .github/scripts/check-pytest-summary.sh pytest.log
 
-      - name: Run integration tests without any test mode
+      - name: Run no-server integration tests
         run: |
           if [ "${{ env.RUNNER_DEBUG }}" = "true" ]; then
             log_level=DEBUG
@@ -96,7 +95,7 @@ jobs:
           fi
           set -o pipefail
           uv run pytest tests/integration_tests/ -v --log-cli-level=${log_level} \
-            -k "not server and not embedded and not oceanbase" | tee pytest.log
+            -k "not server and not oceanbase" | tee pytest.log
           bash .github/scripts/check-pytest-summary.sh pytest.log
 
   integration-test:
@@ -105,18 +104,8 @@ jobs:
       fail-fast: false  # Allow other jobs to continue if one fails
       matrix:
         include:
-          - test_mode: embedded
-            example_host: 127.0.0.1
-            example_port: 2881
-            example_tenant: sys
           - test_mode: server
-            example_host: 127.0.0.1
-            example_port: 2881
-            example_tenant: sys
           - test_mode: oceanbase
-            example_host: localhost
-            example_port: 10000
-            example_tenant: mysql
 
     steps:
       - name: Free disk space
@@ -130,7 +119,7 @@ jobs:
           swap-storage: true
 
       - name: Check out code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up environment
         uses: ./.github/actions/setup-python-env
@@ -148,20 +137,37 @@ jobs:
           datafile_size: '20G'
           log_disk_size: '10G'
           tenant_name: 'mysql'
-          init_sql: "ALTER SYSTEM ob_vector_memory_limit_percentage = 30; create user 'jtuser'@'%'; GRANT SELECT, INSERT, UPDATE, DELETE ON test.* TO 'jtuser'@'%'; FLUSH PRIVILEGES;"
+          init_sql: "ALTER SYSTEM ob_vector_memory_limit_percentage = 30;"
 
       - name: Start seekdb server container
         if: matrix.test_mode == 'server'
         run: |
           docker run --name seekdb-server -p 2881:2881 -d oceanbase/seekdb:1.0.0.0-100000262025111218
-          sleep 15
+          for attempt in {1..30}; do
+            if (echo > /dev/tcp/127.0.0.1/2881) 2>/dev/null; then
+              echo "seekdb server ready after ${attempt} attempt(s)"
+              docker logs seekdb-server
+              exit 0
+            fi
+
+            if [[ "$(docker inspect --format='{{.State.Running}}' seekdb-server 2>/dev/null)" != "true" ]]; then
+              echo "seekdb server container stopped before becoming ready" >&2
+              docker logs seekdb-server
+              exit 1
+            fi
+            sleep 2
+          done
+
           docker logs seekdb-server
+          echo "seekdb server did not become ready within 60 seconds" >&2
+          exit 1
 
       - name: Run integration tests for ${{ matrix.test_mode }}
         env:
           CI: 1
-          SEEKDB_TEST_DATA_ROOT: ${{ github.workspace }}/.seekdb-test-data
           OB_PORT: 10000
+          OB_USER: root
+          OB_PASSWORD: ''
           SERVER_PORT: 2881
         run: |
           # Run integration tests filtered by test mode
@@ -174,28 +180,3 @@ jobs:
           uv run pytest tests/integration_tests/ -v --log-cli-level=${log_level} \
             -k "${{ matrix.test_mode }}" | tee pytest.log
           bash .github/scripts/check-pytest-summary.sh pytest.log
-
-      - name: Run examples for ${{ matrix.test_mode }}
-        env:
-          MODE: ${{ matrix.test_mode }}
-          HOST: ${{ matrix.example_host }}
-          PORT: ${{ matrix.example_port }}
-          TENANT: ${{ matrix.example_tenant }}
-          DATABASE: test
-          SEEKDB_USER: root
-        run: |
-          for example_file in examples/*_example.py; do
-            if [[ "$example_file" == "examples/namespace_example.py" ]]; then
-              echo "Skipping ${example_file}: requires LakeBase 4.6.1+"
-              continue
-            fi
-
-            echo "Testing ${example_file} in ${MODE} mode"
-            if uv run python "$example_file"; then
-              echo "${example_file} passed"
-            else
-              status=$?
-              echo "${example_file} failed with exit code ${status}"
-              exit "$status"
-            fi
-          done

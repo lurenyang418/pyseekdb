@@ -16,13 +16,14 @@ class TestCollectionHybridSearch:
 
     def _create_test_collection(self, client, collection_name: str, dimension: int | None = None):
         """Helper method to create a test collection"""
-        from pyseekdb import HNSWConfiguration
+        from pyseekdb import HNSWConfiguration, Schema
 
         if dimension is not None:
             config = HNSWConfiguration(dimension=dimension, distance="l2")
-            collection = client.create_collection(name=collection_name, configuration=config, embedding_function=None)
+            collection = client.create_collection(name=collection_name, schema=Schema(vector_index=config))
         else:
-            collection = client.create_collection(name=collection_name)
+            config = HNSWConfiguration(dimension=384, distance="l2")
+            collection = client.create_collection(name=collection_name, schema=Schema(vector_index=config))
         return collection, collection.dimension
 
     def _generate_query_vector(self, dimension: int, base_vector: list[float] | None = None) -> list[float]:
@@ -125,7 +126,7 @@ class TestCollectionHybridSearch:
         """
         Test hybrid_search with only full-text search (query).
 
-        Automatically runs for: embedded, server, oceanbase
+        Automatically runs for: server, oceanbase
         """
         collection_name = f"test_hybrid_search_ft_{int(time.time() * 1000)}"
         collection, actual_dimension = self._create_test_collection(db_client, collection_name, dimension=3)
@@ -174,7 +175,7 @@ class TestCollectionHybridSearch:
         """
         Test hybrid_search with only vector search (knn).
 
-        Automatically runs for: embedded, server, oceanbase
+        Automatically runs for: server, oceanbase
         """
         collection_name = f"test_hybrid_search_vec_{int(time.time() * 1000)}"
         collection, actual_dimension = self._create_test_collection(db_client, collection_name, dimension=3)
@@ -212,7 +213,7 @@ class TestCollectionHybridSearch:
         """
         Test hybrid_search with both full-text and vector search.
 
-        Automatically runs for: embedded, server, oceanbase
+        Automatically runs for: server, oceanbase
         """
         collection_name = f"test_hybrid_search_comb_{int(time.time() * 1000)}"
         collection, actual_dimension = self._create_test_collection(db_client, collection_name, dimension=3)
@@ -240,7 +241,7 @@ class TestCollectionHybridSearch:
         """
         Test hybrid_search with metadata filters.
 
-        Automatically runs for: embedded, server, oceanbase
+        Automatically runs for: server, oceanbase
         """
         collection_name = f"test_hybrid_search_meta_{int(time.time() * 1000)}"
         collection, actual_dimension = self._create_test_collection(db_client, collection_name, dimension=3)
@@ -285,7 +286,7 @@ class TestCollectionHybridSearch:
         """
         Test hybrid_search with logical operators in metadata filters.
 
-        Automatically runs for: embedded, server, oceanbase
+        Automatically runs for: server, oceanbase
         """
         collection_name = f"test_hybrid_search_logic_{int(time.time() * 1000)}"
         collection, actual_dimension = self._create_test_collection(db_client, collection_name, dimension=3)
@@ -325,7 +326,7 @@ class TestCollectionHybridSearch:
         """
         Test hybrid_search scalar filters with $in/$nin and #id support.
 
-        Automatically runs for: embedded, server, oceanbase
+        Automatically runs for: server, oceanbase
         """
         collection_name = f"test_hybrid_search_scalar_{int(time.time() * 1000)}"
         collection, actual_dimension = self._create_test_collection(db_client, collection_name, dimension=3)
@@ -380,7 +381,7 @@ class TestCollectionHybridSearch:
         - Hybrid search with query_timeout hint
         - Hybrid search with combined hints
 
-        Automatically runs for: embedded, server, oceanbase
+        Automatically runs for: server, oceanbase
         """
         # Create test collection
         collection_name = f"test_hybrid_hint_{int(time.time() * 1000)}"

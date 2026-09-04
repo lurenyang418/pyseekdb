@@ -155,7 +155,7 @@ class Collection:
     def __repr__(self) -> str:
         """Return a debug-friendly representation of this collection."""
         ns_str = ", use_namespace=True" if self._use_namespace else ""
-        return f"Collection(name='{self._name}', dimension={self._dimension}{ns_str}, client={self._client.mode})"
+        return f"Collection(name='{self._name}', dimension={self._dimension}{ns_str}, client={type(self._client).__name__})"
 
     # ==================== Namespace Management ====================
 
@@ -234,20 +234,6 @@ class Collection:
         Note:
             - Fork is only available for seekdb database version 1.1.0.0 or higher.
 
-        Examples:
-        .. code-block:: python
-            # Fork a collection
-            original = client.get_collection("my_collection")
-            forked = original.fork("my_collection_backup")
-
-            # Verify both collections have the same data
-            assert original.count() == forked.count()
-
-            # Add data to forked collection (original is unaffected)
-            forked.add(ids="new_id", embeddings=[1.0, 2.0, 3.0], documents="New document")
-            assert original.count() == 3  # Original unchanged
-            assert forked.count() == 4    # Forked has new data
-
         """
         self._guard_collection_data_api()
         self._client._collection_fork(collection=self, forked_name=forked_name)
@@ -276,23 +262,6 @@ class Collection:
                        If provided without embeddings, embedding_function will be used to generate embeddings
             **kwargs: Additional parameters
 
-        Examples:
-            # Add single item with embeddings
-            collection.add(ids="1", embeddings=[0.1, 0.2, 0.3], metadatas={"tag": "A"})
-
-            # Add multiple items with embeddings
-            collection.add(
-                ids=["1", "2", "3"],
-                embeddings=[[0.1, 0.2], [0.3, 0.4], [0.5, 0.6]],
-                metadatas=[{"tag": "A"}, {"tag": "B"}, {"tag": "C"}]
-            )
-
-            # Add items with documents (embeddings will be auto-generated if embedding_function is set)
-            collection.add(
-                ids=["1", "2"],
-                documents=["Hello world", "How are you?"],
-                metadatas=[{"tag": "A"}, {"tag": "B"}]
-            )
         """
         self._guard_collection_data_api()
         return self._client._collection_add(
@@ -328,15 +297,6 @@ class Collection:
         Note:
             IDs must exist, otherwise an error will be raised
 
-        Examples:
-            # Update single item
-            collection.update(ids="1", metadatas={"tag": "B"})
-
-            # Update multiple items
-            collection.update(
-                ids=["1", "2"],
-                embeddings=[[0.9, 0.8], [0.7, 0.6]]
-            )
         """
         self._guard_collection_data_api()
         return self._client._collection_update(
@@ -372,15 +332,6 @@ class Collection:
         Note:
             If ID exists, update it; otherwise, insert new data
 
-        Examples:
-            # Upsert single item
-            collection.upsert(ids="1", embeddings=[0.1, 0.2], metadatas={"tag": "A"})
-
-            # Upsert multiple items
-            collection.upsert(
-                ids=["1", "2", "3"],
-                embeddings=[[0.1, 0.2], [0.3, 0.4], [0.5, 0.6]]
-            )
         """
         self._guard_collection_data_api()
         return self._client._collection_upsert(
@@ -414,15 +365,6 @@ class Collection:
         Note:
             At least one of ids, where, or where_document must be provided
 
-        Examples:
-            # Delete by IDs
-            collection.delete(ids=["1", "2", "3"])
-
-            # Delete by metadata filter
-            collection.delete(where={"tag": "A"})
-
-            # Delete by document filter
-            collection.delete(where_document={"$contains": "keyword"})
         """
         self._guard_collection_data_api()
         return self._client._collection_delete(
@@ -481,34 +423,6 @@ class Collection:
             - embeddings: Optional[List[List[List[float]]]] - List of embedding lists, one list per query (if included)
             - distances: Optional[List[List[float]]] - List of distance lists, one list per query
 
-        Examples:
-            # Query by single embedding (dense vector)
-            results = collection.query(
-                query_embeddings=[0.1, 0.2, 0.3],
-                n_results=5
-            )
-
-            # Query by texts (will be embedded automatically)
-            results = collection.query(
-                query_texts=["my query text"],
-                n_results=10
-            )
-
-            # Sparse vector query using query_key
-            results = collection.query(
-                query_texts=["fox animal"],
-                query_key=K.SPARSE_EMBEDDING,
-                n_results=5
-            )
-
-            # Query with query hint
-            from pyseekdb.client.query_types import QueryHint
-            results = collection.query(
-                query_texts=["machine learning"],
-                n_results=5,
-                where={"score": {"$gte": 90}},
-                query_hint=QueryHint(parallel=8, query_timeout=10.0)
-            )
         """
         self._guard_collection_data_api()
         _validate_n_results(n_results)
@@ -555,6 +469,7 @@ class Collection:
 
         Returns:
             Dict with keys (chromadb-compatible format):
+
             - ids: List[str] - List of IDs
             - documents: Optional[List[str]] - List of documents (if included)
             - metadatas: Optional[List[Dict]] - List of metadata dictionaries (if included)
@@ -563,35 +478,6 @@ class Collection:
         Note:
             If no parameters provided, returns all data (up to limit)
 
-        Examples:
-            # Get by single ID
-            results = collection.get(ids="1")
-            # results["ids"] contains ["1"]
-            # results["documents"] contains document for ID "1"
-
-            # Get by multiple IDs
-            results = collection.get(ids=["1", "2", "3"])
-            # results["ids"] contains ["1", "2", "3"]
-            # results["documents"] contains documents for all IDs
-
-            # Get by filter
-            results = collection.get(
-                where={"tag": "A"},
-                limit=10
-            )
-            # results["ids"] contains all matching IDs
-            # results["documents"] contains all matching documents
-
-            # Get all data
-            results = collection.get(limit=100)
-
-            # Get with query hint
-            from pyseekdb.client.query_types import QueryHint
-            results = collection.get(
-                where={"category": "AI"},
-                limit=10,
-                query_hint=QueryHint(parallel=4, query_timeout=5.0)
-            )
         """
         self._guard_collection_data_api()
         return self._client._collection_get(
@@ -644,42 +530,6 @@ class Collection:
             - embeddings: Optional[List[List[List[float]]]] - List of embedding lists (if included)
             - distances: Optional[List[List[float]]] - List of distance lists
 
-        Examples:
-            # Hybrid search with both full-text and vector search
-            results = collection.hybrid_search(
-                query={
-                    "where_document": {"$contains": "machine learning"},
-                    "where": {"category": {"$eq": "science"}},
-                    "n_results": 10
-                },
-                knn={
-                    "query_texts": ["AI research"],
-                    "where": {"year": {"$gte": 2020}},
-                    "n_results": 10
-                },
-                rank={"rrf": {}},
-                n_results=5,
-                include=["documents", "metadatas", "embeddings"]
-            )
-            # results["ids"][0] contains IDs for the hybrid search
-            # results["documents"][0] contains documents for the hybrid search
-            # results["distances"][0] contains distances for the hybrid search
-
-            # Hybrid search with query hint
-            from pyseekdb.client.query_types import QueryHint
-            results = collection.hybrid_search(
-                query={
-                    "where_document": {"$contains": "AI"},
-                    "n_results": 8
-                },
-                knn={
-                    "query_texts": ["artificial intelligence"],
-                    "n_results": 8
-                },
-                rank={"rrf": {"rank_window_size": 60}},
-                n_results=10,
-                query_hint=QueryHint(parallel=6, query_timeout=15.0)
-            )
         """
         self._guard_collection_data_api()
         _validate_n_results(n_results)
@@ -723,7 +573,7 @@ class Collection:
         Returns:
             Item count
 
-        Examples:
+        Examples::
             count = collection.count()
             print(f"Collection has {count} items")
         """
@@ -744,12 +594,6 @@ class Collection:
             - metadatas: List[Dict] - List of metadata dictionaries (always included)
             - embeddings: List[List[float]] - List of embeddings (always included)
 
-        Examples:
-            # Preview first 5 items (returns all columns by default)
-            preview = collection.peek(limit=5)
-            for i in range(len(preview["ids"])):
-                print(f"ID: {preview['ids'][i]}, Document: {preview['documents'][i]}")
-                print(f"Metadata: {preview['metadatas'][i]}, Embedding: {preview['embeddings'][i]}")
         """
         self._guard_collection_data_api()
         return self._client._collection_get(

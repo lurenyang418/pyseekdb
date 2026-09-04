@@ -1,13 +1,21 @@
 # pyseekdb
 
-pyseekdb is a Python SDK for seekdb and OceanBase AI search. It supports embedded and server deployments with vector, full-text, and hybrid retrieval, and exposes a collection-first API for application workflows. For advanced database operations, you can use MySQL-compatible drivers to run SQL against seekdb and OceanBase.
+pyseekdb is a Python SDK for seekdb and OceanBase AI search. It connects to a remote
+seekdb Server or OceanBase Server over pymysql and exposes a collection-first API for
+vector, full-text, and hybrid retrieval. For advanced database operations, you can use
+MySQL-compatible drivers to run SQL against seekdb and OceanBase.
+
+Since pyseekdb 2.0, embedded mode and bundled embedding function implementations
+have been removed. You must run a seekdb/OceanBase server and supply your own
+`EmbeddingFunction` (via the `EmbeddingFunction` protocol) when creating
+collections with a dense vector index.
 
 Key features:
 
-- **Unified API**: Single interface for embedded and remote server modes
+- **Remote Server Connection**: Connects to a seekdb Server or OceanBase Server
 - **Vector Operations**: Efficient vector similarity search
 - **Hybrid Search**: Combine vector and full-text search
-- **Embedding Functions**: Built-in support for various embedding models
+- **Pluggable Embedding Functions**: Use your own `EmbeddingFunction` implementation
 - **Collection Management**: Easy collection (table) creation and management
 - **Database Management**: Admin operations for database management
 
@@ -17,7 +25,6 @@ Key features:
 - SDK guide: https://docs.seekdb.ai/seekdb/pyseekdb-sdk-get-started
 - User guide: https://docs.seekdb.ai/seekdb/deploy-overview
 - API reference: https://docs.seekdb.ai/seekdb/api-overview
-- RAG demo: [English](demo/rag/README.md) / [中文](demo/rag/README_CN.md)
 - Contributing: [CONTRIBUTING.md](CONTRIBUTING.md)
 
 ## Installation
@@ -28,19 +35,24 @@ pip install -U pyseekdb
 uv add pyseekdb
 ```
 
-For embedded mode (local seekdb engine), install with the `embedded` extras:
-
-```bash
-pip install -U pyseekdb[embedded]
-```
-
 ## Quick Start
 
 ```python
 import pyseekdb
+from your_app.embedding_functions import MyDenseEmbeddingFunction
 
-client = pyseekdb.Client(path="./seekdb.db", database="demo")
-collection = client.get_or_create_collection("my_collection")
+client = pyseekdb.Client(
+    host="127.0.0.1",
+    port=2881,
+    tenant="sys",
+    database="demo",
+    user="root",
+    password="",
+)
+collection = client.get_or_create_collection(
+    "my_collection",
+    embedding_function=MyDenseEmbeddingFunction(),
+)
 
 collection.add(
     ids=["doc1", "doc2"],

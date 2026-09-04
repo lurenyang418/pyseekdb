@@ -2,14 +2,17 @@
 
 Welcome to pyseekdb's documentation.
 
-pyseekdb is a Python SDK for seekdb and OceanBase AI search. It supports embedded and server deployments with vector, full-text, and hybrid retrieval, and exposes a collection-first API for application workflows. For advanced database operations, you can use MySQL-compatible drivers to run SQL against seekdb and OceanBase.
+pyseekdb is a Python SDK for seekdb and OceanBase AI search. Since pyseekdb 2.0 it
+connects to a remote seekdb Server or OceanBase Server over pymysql and exposes a
+collection-first API for vector, full-text, and hybrid retrieval. For advanced database
+operations, you can use MySQL-compatible drivers to run SQL against seekdb and OceanBase.
 
 ## Features
 
-- **Unified API**: Single interface for embedded and remote server modes.
+- **Remote Server Connection**: Connects to a seekdb Server or OceanBase Server via pymysql.
 - **Vector Operations**: Efficient vector similarity search.
 - **Hybrid Search**: Combine vector and full-text search.
-- **Embedding Functions**: Built-in support for various embedding models.
+- **Pluggable Embedding Functions**: Bring your own `EmbeddingFunction` implementation.
 - **Collection Management**: Easy collection (table) creation and management.
 - **Database Management**: Admin operations for database management.
 
@@ -21,27 +24,14 @@ pip install -U pyseekdb
 uv add pyseekdb
 ```
 
-For embedded mode (local seekdb engine), install with the `embedded` extras:
-
-```bash
-pip install -U pyseekdb[embedded]
-```
-
 ## Quick Start
-
-Embedded Mode
-
-```python
-import pyseekdb
-
-client = pyseekdb.Client(path="./seekdb.db", database="test")
-collection = client.get_or_create_collection("my_collection")
-```
 
 Remote Server Mode
 
 ```python
 import pyseekdb
+from your_app.embedding_functions import MyDenseEmbeddingFunction
+from pyseekdb import Schema, VectorIndexConfig
 
 client = pyseekdb.Client(
     host="localhost",
@@ -49,9 +39,16 @@ client = pyseekdb.Client(
     tenant="sys",
     database="test",
     user="root",
-    password="pass"
+    password="pass",
 )
-collection = client.get_or_create_collection("my_collection")
+collection = client.get_or_create_collection(
+    "my_collection",
+    schema=Schema(
+        vector_index=VectorIndexConfig(
+            embedding_function=MyDenseEmbeddingFunction(),
+        )
+    ),
+)
 ```
 
 Admin Client
@@ -59,7 +56,13 @@ Admin Client
 ```python
 import pyseekdb
 
-admin = pyseekdb.AdminClient(path="./seekdb.db")
+admin = pyseekdb.AdminClient(
+    host="localhost",
+    port=2881,
+    tenant="sys",
+    user="root",
+    password="pass",
+)
 admin.create_database("new_db")
 databases = admin.list_databases()
 ```

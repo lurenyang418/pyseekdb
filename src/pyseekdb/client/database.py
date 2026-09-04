@@ -8,8 +8,8 @@ class Database:
     Database object representing a database instance.
 
     Note:
-        - tenant is None for embedded/server mode (no tenant concept)
-        - tenant is set for OceanBase mode (multi-tenant architecture)
+        - tenant is None for seekdb Server mode (no tenant concept)
+        - tenant is set for OceanBase Server mode (multi-tenant architecture)
     """
 
     def __init__(
@@ -25,7 +25,7 @@ class Database:
 
         Args:
             name: database name
-            tenant: tenant name (only for OceanBase, None for embedded/server mode)
+            tenant: tenant name (only for OceanBase, None for seekdb Server mode)
             charset: character set
             collation: collation
             **kwargs: other metadata

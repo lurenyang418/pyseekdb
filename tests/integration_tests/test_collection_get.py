@@ -10,6 +10,7 @@ import pytest
 
 import pyseekdb
 from pyseekdb.client.query_types import QueryHint
+from tests.stubs import StubEmbeddingFunction
 
 
 # ==================== Simple 3D Embedding Function for Testing ====================
@@ -98,12 +99,12 @@ class TestCollectionGet:
         - $nin with complementary expectations
         - Handles missing fields, null values, empty arrays
 
-        Automatically runs for: embedded, server, oceanbase
+        Automatically runs for: server, oceanbase
         """
         collection_name = f"test_tags_in_{int(time.time() * 1000)}"
         collection = db_client.get_or_create_collection(
             name=collection_name,
-            embedding_function=pyseekdb.DefaultEmbeddingFunction(),
+            schema=pyseekdb.Schema(embedding_function=StubEmbeddingFunction(dimension=384)),
         )
 
         try:
@@ -159,7 +160,7 @@ class TestCollectionGet:
             collection_name_2 = f"test_tags_nin_{int(time.time() * 1000)}"
             collection_2 = db_client.get_or_create_collection(
                 name=collection_name_2,
-                embedding_function=pyseekdb.DefaultEmbeddingFunction(),
+                schema=pyseekdb.Schema(embedding_function=StubEmbeddingFunction(dimension=384)),
             )
 
             try:
@@ -213,12 +214,12 @@ class TestCollectionGet:
         - Edge cases: empty array, null, missing field
         - Consistency: $eq behavior matches $in with single value
 
-        Automatically runs for: embedded, server, oceanbase
+        Automatically runs for: server, oceanbase
         """
         collection_name = f"test_eq_ne_{int(time.time() * 1000)}"
         collection = db_client.get_or_create_collection(
             name=collection_name,
-            embedding_function=pyseekdb.DefaultEmbeddingFunction(),
+            schema=pyseekdb.Schema(embedding_function=StubEmbeddingFunction(dimension=384)),
         )
 
         try:
@@ -383,7 +384,7 @@ class TestCollectionGet:
         - Get with include parameter
         - Get with scalar $in/$nin operators
 
-        Automatically runs for: embedded, server, oceanbase
+        Automatically runs for: server, oceanbase
         """
         # Create test collection
         collection_name = f"test_get_{int(time.time() * 1000)}"
@@ -392,8 +393,7 @@ class TestCollectionGet:
         embedding_function = Simple3DEmbeddingFunction()
         collection = db_client.create_collection(
             name=collection_name,
-            configuration=config,
-            embedding_function=embedding_function,
+            schema=pyseekdb.Schema(vector_index=config, embedding_function=embedding_function),
         )
 
         try:
@@ -545,7 +545,7 @@ class TestCollectionGet:
         - Get with query_timeout hint
         - Get with both parallel and query_timeout hints
 
-        Automatically runs for: embedded, server, oceanbase
+        Automatically runs for: server, oceanbase
         """
         # Create test collection
         collection_name = f"test_get_hint_{int(time.time() * 1000)}"
@@ -553,8 +553,7 @@ class TestCollectionGet:
         embedding_function = Simple3DEmbeddingFunction()
         collection = db_client.create_collection(
             name=collection_name,
-            configuration=config,
-            embedding_function=embedding_function,
+            schema=pyseekdb.Schema(vector_index=config, embedding_function=embedding_function),
         )
 
         try:

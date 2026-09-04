@@ -11,7 +11,7 @@ import time
 
 import pytest
 
-from pyseekdb import HNSWConfiguration
+from pyseekdb import HNSWConfiguration, Schema
 
 
 class TestSpecialCharactersBugs:
@@ -28,7 +28,7 @@ class TestSpecialCharactersBugs:
 
         # Create collection using proper API
         config = HNSWConfiguration(dimension=dimension, distance="cosine")
-        collection = db_client.create_collection(name=collection_name, configuration=config, embedding_function=None)
+        collection = db_client.create_collection(name=collection_name, schema=Schema(vector_index=config))
 
         # Test cases with backslashes in documents
         test_cases = [
@@ -122,7 +122,7 @@ class TestSpecialCharactersBugs:
 
         # Create collection using proper API
         config = HNSWConfiguration(dimension=dimension, distance="cosine")
-        collection = db_client.create_collection(name=collection_name, configuration=config, embedding_function=None)
+        collection = db_client.create_collection(name=collection_name, schema=Schema(vector_index=config))
 
         # Test cases with percent signs in IDs
         test_cases = [
@@ -186,7 +186,7 @@ class TestSpecialCharactersBugs:
 
         # Create collection using proper API
         config = HNSWConfiguration(dimension=dimension, distance="cosine")
-        collection = db_client.create_collection(name=collection_name, configuration=config, embedding_function=None)
+        collection = db_client.create_collection(name=collection_name, schema=Schema(vector_index=config))
 
         # Test cases with double quotes in metadata
         test_cases = [
@@ -238,7 +238,7 @@ class TestSpecialCharactersBugs:
 
         # Create collection using proper API
         config = HNSWConfiguration(dimension=dimension, distance="cosine")
-        collection = db_client.create_collection(name=collection_name, configuration=config, embedding_function=None)
+        collection = db_client.create_collection(name=collection_name, schema=Schema(vector_index=config))
 
         print("\n🔍 Testing all special characters combined")
         test_id = "id_with_%_percent"

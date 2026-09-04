@@ -1,74 +1,65 @@
 """
-pyseekdb - Unified vector database client wrapper
+pyseekdb - Python SDK for seekdb and OceanBase vector search.
 
-Based on seekdb and pymysql, providing a simple and unified API.
+A unified client for connecting to a seekdb Server or OceanBase Server via pymysql.
+Provides collection-first APIs for vector, full-text, and hybrid retrieval.
 
-Supports two modes:
-
-* **Embedded mode** - using local seekdb
-* **Remote server mode** - connecting to remote server via pymysql (supports both seekdb Server and OceanBase Server)
+Since pyseekdb 2.0, embedded mode and bundled embedding function implementations
+have been removed. Users must run a seekdb/OceanBase server and supply their own
+``EmbeddingFunction`` (via the :class:`~pyseekdb.client.embedding_function.EmbeddingFunction`
+protocol) when creating collections with a dense vector index.
 
 Examples:
-
-Embedded mode - Collection management:
-
-.. code-block:: python
-
-    import pyseekdb
-    client = pyseekdb.Client(path="./seekdb.db", database="test")
-    collection = client.get_or_create_collection("my_collection")
 
 Remote server mode (seekdb Server) - Collection management:
 
 .. code-block:: python
 
     import pyseekdb
+    from pyseekdb import HNSWConfiguration, Schema, VectorIndexConfig
     client = pyseekdb.Client(
         host='localhost',
         port=2881,
         tenant="sys",
         database="test",
         user="root",
-        password="pass"
+        password="pass",
     )
-    collection = client.get_or_create_collection("my_collection")
+    collection = client.get_or_create_collection(
+        "my_collection",
+        schema=Schema(vector_index=VectorIndexConfig(hnsw=HNSWConfiguration(dimension=384))),
+    )
 
 Remote server mode (OceanBase Server) - Collection management:
 
 .. code-block:: python
 
     import pyseekdb
+    from pyseekdb import HNSWConfiguration, Schema, VectorIndexConfig
     client = pyseekdb.Client(
         host='localhost',
         port=2881,
         tenant="test",
         database="test",
         user="root",
-        password="pass"
+        password="pass",
     )
-    collection = client.get_or_create_collection("my_collection")
+    collection = client.get_or_create_collection(
+        "my_collection",
+        schema=Schema(vector_index=VectorIndexConfig(hnsw=HNSWConfiguration(dimension=384))),
+    )
 
 Admin client - Database management:
 
 .. code-block:: python
 
     import pyseekdb
-    admin = pyseekdb.AdminClient(path="./seekdb.db")
+    admin = pyseekdb.AdminClient(host="localhost", port=2881, user="root", password="pass")
     admin.create_database("new_db")
     databases = admin.list_databases()
 """
 
 import importlib.metadata
-
-# Note: pylibseekdb built with ABI=0 and onnxruntime built with ABI=1, so there's a conflict between the two libraries.
-# pylibseekdb is built both with ABI=0 and the -Bsymbolic flag, so we can load libraries with ABI=1 first
-# and then pylibseekdb to avoid these conflicts.
-if importlib.util.find_spec("onnxruntime"):
-    import onnxruntime  # noqa: F401
-
-# torch and pylibseekdb both use openmp library, which is conflict on macos.
-if importlib.util.find_spec("torch"):
-    import torch  # noqa: F401
 
 from .client import (
     AdminAPI,
@@ -77,8 +68,6 @@ from .client import (
     BaseConnection,
     BengProperties,
     Client,
-    ClientAPI,
-    Configuration,
     Database,
     EmbeddingFunction,
     FulltextIndexConfig,
@@ -100,7 +89,6 @@ from .client import (
     SparseVectorIndexConfig,
     VectorIndexConfig,
     Version,
-    get_default_embedding_function,
     register_embedding_function,
     register_sparse_embedding_function,
 )
@@ -121,11 +109,8 @@ __all__ = [
     "BaseConnection",
     "BengProperties",
     "Client",
-    "ClientAPI",
     "Collection",
-    "Configuration",
     "Database",
-    "DefaultEmbeddingFunction",
     "EmbeddingFunction",
     "FulltextIndexConfig",
     "HNSWConfiguration",
@@ -147,18 +132,6 @@ __all__ = [
     "SparseVectorIndexConfig",
     "VectorIndexConfig",
     "Version",
-    "get_default_embedding_function",
     "register_embedding_function",
     "register_sparse_embedding_function",
 ]
-
-
-def __getattr__(name: str) -> object:
-    """
-    Lazily expose optional symbols to avoid importing heavy dependencies eagerly.
-    """
-    if name == "DefaultEmbeddingFunction":
-        from pyseekdb.client import DefaultEmbeddingFunction
-
-        return DefaultEmbeddingFunction
-    raise AttributeError(f"module 'pyseekdb' has no attribute '{name}'")

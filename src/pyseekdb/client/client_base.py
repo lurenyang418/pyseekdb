@@ -9,8 +9,6 @@ import os
 import re
 import struct
 import time
-import warnings
-from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -26,13 +24,10 @@ from .configuration import (
     LOGIC_DATA_TABLE_LOB_INROW_THRESHOLD,
     MAX_HNSW_VECTOR_DIMENSION,
     MAX_IVF_VECTOR_DIMENSION,
-    Configuration,
-    ConfigurationParam,
     FulltextIndexConfig,
     HNSWConfiguration,
     IVFConfiguration,
     IVFIndexType,
-    VectorIndexConfig,
 )
 from .database import Database
 from .document_query_builder import (
@@ -47,7 +42,6 @@ from .embedding_function import (
 from .embedding_function import (
     EmbeddingFunction,
     EmbeddingFunctionRegistry,
-    get_default_embedding_function,
 )
 from .filters import FilterBuilder
 from .kernel_errors import maybe_reraise_friendly_kernel_error, namespace_kernel_error_guard
@@ -90,14 +84,12 @@ _MAX_COLLECTION_NAME_LENGTH = 512
 
 # Minimum LakeBase (OceanBase Database AI) version for namespace-enabled collections.
 NAMESPACE_MIN_LAKEBASE_VERSION = Version("4.6.1.0")
-# Backward-compatible alias used by existing tests and skip helpers.
-NAMESPACE_MIN_OB_VERSION = NAMESPACE_MIN_LAKEBASE_VERSION
 
 _LAKEBASE_VERSION_MARKER = "database ai"
 
 logger = logging.getLogger(__name__)
 
-from .types import _NOT_PROVIDED, _NotProvided  # noqa: E402, F401
+from .types import _NOT_PROVIDED  # noqa: E402
 
 
 def _unquote_json_extract_expressions(query_sql: str) -> str:
@@ -178,35 +170,6 @@ def _reraise_unless_unique_index_exists(exc: BaseException) -> None:
     ):
         return
     raise exc
-
-
-def _extract_hnsw_config(config: ConfigurationParam) -> HNSWConfiguration | None:
-    """Return the HNSW config from a Configuration/HNSWConfiguration, or None."""
-    if config is None:
-        return None
-    elif isinstance(config, HNSWConfiguration):
-        return config
-    elif isinstance(config, Configuration):
-        return config.hnsw
-    else:
-        raise TypeError(f"configuration must be Configuration, HNSWConfiguration, or None, got {type(config)}")
-
-
-def _extract_fulltext_config(
-    config: ConfigurationParam,
-) -> FulltextIndexConfig | None:
-    """Return the fulltext index config from a Configuration, or None."""
-    if config is None:
-        return None
-    elif isinstance(config, HNSWConfiguration):
-        # HNSWConfiguration doesn't have fulltext config, return None (will use default)
-        return None
-    elif isinstance(config, Configuration):
-        # If Configuration has fulltext_config, return it; otherwise return None (will use default)
-        return config.fulltext_config
-    else:
-        # Should not reach here due to type checking, but handle gracefully
-        return None
 
 
 def _validate_collection_name(name: str) -> None:
@@ -406,80 +369,6 @@ def _embedding_to_hexstring(embedding: list[float]) -> str:
     return f"X'{hexstr}'"
 
 
-class ClientAPI(ABC):
-    """
-    Client API interface for collection operations only.
-    This is what end users interact with through the Client proxy.
-    """
-
-    @abstractmethod
-    def create_collection(
-        self,
-        name: str,
-        schema: Schema | None = None,
-        configuration: ConfigurationParam = _NOT_PROVIDED,
-        embedding_function: EmbeddingFunctionParam = _NOT_PROVIDED,
-        use_namespace: bool = False,
-        **kwargs,
-    ) -> "Collection":
-        """
-        Create collection
-
-        Args:
-            name: Collection name
-            schema: Schema configuration for fine-grained index control, including
-                   sparse vector index support. When provided, ``configuration`` and
-                   ``embedding_function`` parameters are ignored.
-            configuration: Index configuration (Configuration or HNSWConfiguration).
-                          For backward compatibility, HNSWConfiguration is still accepted.
-                          Configuration can include fulltext analyzer configuration (FulltextIndexConfig).
-                          Ignored if ``schema`` is provided.
-            embedding_function: Embedding function to convert documents to embeddings.
-                               Defaults to DefaultEmbeddingFunction.
-                               If explicitly set to None, collection will not have an embedding function.
-                               Ignored if ``schema`` is provided.
-            use_namespace: If True, create a namespace-enabled collection. Defaults to False.
-            **kwargs: Additional parameters
-        """
-        pass
-
-    @abstractmethod
-    def get_collection(self, name: str, embedding_function: EmbeddingFunctionParam = _NOT_PROVIDED) -> "Collection":
-        """Get an existing collection.
-
-        Args:
-            name: The name of the collection to retrieve.
-            embedding_function: The embedding function to use. If not provided,
-                it will try to load the function used when creating the collection.
-                If explicitly set to None, no embedding function will be used.
-
-        Returns:
-            The ``Collection`` object.
-
-        Raises:
-            ValueError: If the collection does not exist.
-
-        Examples:
-            >>> collection = client.get_collection("my_collection")
-        """
-        pass
-
-    @abstractmethod
-    def delete_collection(self, name: str) -> None:
-        """Delete collection"""
-        pass
-
-    @abstractmethod
-    def list_collections(self) -> list["Collection"]:
-        """List all collections"""
-        pass
-
-    @abstractmethod
-    def has_collection(self, name: str) -> bool:
-        """Check if collection exists"""
-        pass
-
-
 @dataclass
 class _CollectionMeta:
     """
@@ -492,14 +381,13 @@ class _CollectionMeta:
 
     @staticmethod
     def from_row(row: Any) -> "_CollectionMeta":
-        """Construct a _CollectionMeta from a catalog row (dict for server, tuple for embedded)."""
+        """Construct a _CollectionMeta from a catalog row (dict returned by the server)."""
         if isinstance(row, dict):
-            # Server client returns dict, get the first value
             collection_id = row["COLLECTION_ID"]
             collection_name = row["COLLECTION_NAME"]
             settings = row["SETTINGS"]
         elif isinstance(row, (tuple, list)):
-            # Embedded client returns tuple, first element is collection id
+            # Defensive: some drivers may return positional tuples
             collection_id = row[0] if len(row) > 0 else ""
             collection_name = row[1] if len(row) > 1 else ""
             settings = row[2] if len(row) > 2 else ""
@@ -595,7 +483,7 @@ class BaseClient(BaseConnection, AdminAPI):
         """
         Detect database type and version.
 
-        Works for all three modes: seekdb-embedded, seekdb-server, and oceanbase.
+        Works for both server modes: seekdb-server and oceanbase.
         Version detection is case-insensitive for seekdb.
 
         Returns:
@@ -848,167 +736,40 @@ class BaseClient(BaseConnection, AdminAPI):
 
     # ==================== Collection Management (User-facing) ====================
 
-    def _prepare_schema_parameters(
-        self,
-        configuration: ConfigurationParam = _NOT_PROVIDED,
-        embedding_function: EmbeddingFunctionParam = _NOT_PROVIDED,
-    ) -> Schema:
-        # Handle embedding function first
-        # If not provided (sentinel), use default embedding function
-        """Normalize and validate schema parameters before creating a collection."""
-        if embedding_function is _NOT_PROVIDED:
-            embedding_function = get_default_embedding_function()
-
-        # Calculate actual dimension from embedding function if provided
-        actual_dimension = None
-        if embedding_function is not None:
-            try:
-                # First, try to get dimension from the embedding function's dimension property
-                # This avoids initializing the model (e.g., onnxruntime) during collection creation
-                if hasattr(embedding_function, "dimension"):
-                    actual_dimension = embedding_function.dimension
-                    logger.debug(f"Using embedding function dimension: {actual_dimension}")
-                else:
-                    # Fallback: if no dimension attribute, call the function to calculate dimension
-                    # This may trigger model initialization, but is necessary for custom embedding functions
-                    test_embeddings = embedding_function.__call__("seekdb")
-                    if test_embeddings and len(test_embeddings) > 0:
-                        actual_dimension = len(test_embeddings[0])
-                        logger.info(f"Calculated embedding function dimension: {actual_dimension}")
-                    else:
-                        raise ValueError(  # noqa: TRY301
-                            "Embedding function returned empty result when called with 'seekdb'"
-                        )
-            except Exception as e:
-                raise ValueError(
-                    f"Failed to get dimension from embedding function: {e}. "
-                    f"Please ensure the embedding function has a 'dimension' attribute or can be called with a string input."
-                ) from e
-
-        # Handle configuration
-        # Extract HNSWConfiguration from ConfigurationParam (handles both Configuration and HNSWConfiguration)
-        hnsw_config = None
-
-        if configuration is _NOT_PROVIDED:
-            # Use default configuration, but if embedding_function is provided, use its dimension
-            if actual_dimension is not None:
-                hnsw_config = HNSWConfiguration(dimension=actual_dimension, distance=DEFAULT_DISTANCE_METRIC)
-            else:
-                hnsw_config = HNSWConfiguration(dimension=DEFAULT_VECTOR_DIMENSION, distance=DEFAULT_DISTANCE_METRIC)
-        elif configuration is None:
-            # Configuration is explicitly set to None
-            # Try to calculate dimension from embedding_function
-            if embedding_function is None:
-                raise ValueError(
-                    "Cannot create collection: configuration is explicitly set to None and "
-                    "embedding_function is also None. Cannot determine dimension without either a configuration "
-                    "or an embedding function. Please either:\n"
-                    "  1. Provide a configuration with dimension specified (e.g., HNSWConfiguration(dimension=128, distance='cosine')), or\n"
-                    "  2. Provide an embedding_function to calculate dimension automatically, or\n"
-                    "  3. Do not set configuration=None (use default configuration)."
-                )
-
-            # Use calculated dimension from embedding function and default distance metric
-            if actual_dimension is not None:
-                hnsw_config = HNSWConfiguration(dimension=actual_dimension, distance=DEFAULT_DISTANCE_METRIC)
-            else:
-                raise ValueError(
-                    "Failed to calculate dimension from embedding function. "
-                    "Please ensure the embedding function can be called with a string input."
-                )
-        else:
-            # Extract HNSWConfiguration from Configuration or use HNSWConfiguration directly
-            hnsw_config = _extract_hnsw_config(configuration)
-
-            # If Configuration was provided but hnsw is None, create default HNSWConfiguration
-            if hnsw_config is None:
-                if actual_dimension is not None:
-                    hnsw_config = HNSWConfiguration(dimension=actual_dimension, distance=DEFAULT_DISTANCE_METRIC)
-                else:
-                    hnsw_config = HNSWConfiguration(
-                        dimension=DEFAULT_VECTOR_DIMENSION,
-                        distance=DEFAULT_DISTANCE_METRIC,
-                    )
-
-        # If embedding_function is provided, validate configuration dimension matches
-        if embedding_function is not None and actual_dimension is not None:
-            if hnsw_config.dimension != actual_dimension:
-                raise ValueError(
-                    f"Configuration dimension ({hnsw_config.dimension}) doesn't match "
-                    f"embedding function dimension ({actual_dimension}). "
-                    f"Please update configuration to use dimension={actual_dimension} or remove dimension from configuration."
-                )
-            # Use actual dimension from embedding function
-            dimension = actual_dimension
-        else:
-            # No embedding function, use configuration dimension
-            dimension = hnsw_config.dimension
-
-        hnsw_config.dimension = dimension
-        fulltext_config = _extract_fulltext_config(configuration)
-        vic = VectorIndexConfig(hnsw=hnsw_config, embedding_function=embedding_function)
-        return Schema(
-            vector_index=vic,
-            fulltext_index=fulltext_config,
-        )
-
     def create_collection(
         self,
         name: str,
         schema: Schema | None = None,
-        configuration: ConfigurationParam = _NOT_PROVIDED,
-        embedding_function: EmbeddingFunctionParam = _NOT_PROVIDED,
         use_namespace: bool = False,
         partition_count: int | None = None,
-        **kwargs,
     ) -> "Collection":
         """Create a new collection.
 
         Args:
             name: The name of the collection to create. Must contain only alphanumeric
                 characters or underscores.
-            schema: Schema configuration. Defaults to None (uses default schema). Can be a ``Schema`` object.
-            configuration: Index configuration. Defaults to None (uses HNSW with
-                Cosine distance and dimension 384). Can be a ``Configuration`` or
-                ``HNSWConfiguration`` object. If set to None, the dimension will be
-                inferred from the embedding function.
-            embedding_function: The embedding function to use for this collection.
-                Defaults to ``DefaultEmbeddingFunction`` (all-MiniLM-L6-v2). If set to None,
-                no embedding function will be used (embeddings must be provided manually).
+            schema: Schema configuration. Defaults to ``Schema()``. The schema contains
+                all dense, sparse, full-text, and embedding-function configuration.
             use_namespace: If True, create a namespace-enabled collection. Defaults to False.
             partition_count: Number of partitions for the namespace physical tables.
                 Only valid when ``use_namespace=True``. Defaults to 1000 when not provided.
                 Passing it for a non-namespace collection raises ``ValueError``.
-            **kwargs: Additional parameters for collection creation.
 
         Returns:
             The created ``Collection`` object.
 
         Raises:
             ValueError: If the collection name is invalid, already exists, or if the
-                configuration/embedding function combination is invalid (e.g., dimension mismatch).
-            TypeError: If the configuration object is of an invalid type.
+                schema/embedding function combination is invalid (e.g., dimension mismatch).
+            TypeError: If the schema object is of an invalid type.
 
         Examples:
-            Create a collection with default settings:
+            Create a collection with an explicit schema:
 
-            >>> client.create_collection("my_collection")
-
-            Create a collection with a custom embedding function:
-
-            >>> from pyseekdb import DefaultEmbeddingFunction
-            >>> ef = DefaultEmbeddingFunction(model_name="all-MiniLM-L6-v2")
-            >>> collection = client.create_collection("my_docs", embedding_function=ef)
-
-            Create a collection with specific configuration:
-
-            >>> from pyseekdb import HNSWConfiguration
-            >>> config = HNSWConfiguration(dimension=128, distance="l2")
-            >>> collection = client.create_collection(
-            ...     "custom_config",
-            ...     configuration=config,
-            ...     embedding_function=None
+            >>> schema = Schema(
+            ...     vector_index=VectorIndexConfig(hnsw=HNSWConfiguration(dimension=128, distance="l2"))
             ... )
+            >>> collection = client.create_collection("custom_config", schema=schema)
         """
         _validate_collection_name(name)
         if partition_count is not None and not use_namespace:
@@ -1020,14 +781,7 @@ class BaseClient(BaseConnection, AdminAPI):
         if self.has_collection(name) and not (use_namespace and self._is_incomplete_ns_collection(name)):
             raise ValueError(f"Collection '{name}' already exists")
 
-        # Resolve schema: either use the provided schema or build one from legacy params
-        if schema is not None:
-            if configuration is not _NOT_PROVIDED or embedding_function is not _NOT_PROVIDED:
-                warnings.warn(
-                    "schema and configuration/embedding_function are both provided, schema will be used",
-                    stacklevel=2,
-                )
-        elif use_namespace:
+        if schema is None and use_namespace:
             raise ValueError(
                 "use_namespace=True requires an explicit Schema with an IVF vector index. "
                 "When schema is omitted, create_collection builds the default non-namespace "
@@ -1036,31 +790,39 @@ class BaseClient(BaseConnection, AdminAPI):
                 "ivf=IVFConfiguration(dimension=..., distance=...)), ...). "
                 "Or set use_namespace=False for a standard HNSW collection."
             )
-        else:
-            # Legacy path: convert configuration + embedding_function into a Schema
-            schema = self._prepare_schema_parameters(configuration, embedding_function)
+        elif schema is None:
+            schema = Schema()
 
+        if not isinstance(schema, Schema):
+            raise TypeError(f"schema must be a Schema instance, got {type(schema).__name__}")
         logger.debug(f"schema: {schema}")
 
         if use_namespace:
-            return self._create_namespace_collection(name, schema, partition_count=partition_count, **kwargs)
+            return self._create_namespace_collection(name, schema, partition_count=partition_count)
 
         # Resolve HNSW configuration dimension if not set
         hnsw_config = schema.vector_index.hnsw
         dense_embedding_function = schema.vector_index.embedding_function
         if dense_embedding_function is _NOT_PROVIDED:
-            dense_embedding_function = get_default_embedding_function()
+            raise ValueError(
+                "Invalid Schema: `vector_index.embedding_function` must be an EmbeddingFunction, None, "
+                "or omitted when the dense dimension is explicit."
+            )
         if hnsw_config is None:
-            # Determine dimension from embedding function
-            actual_dimension = self._get_embedding_function_dimension(dense_embedding_function)
-            hnsw_config = HNSWConfiguration(dimension=actual_dimension, distance=DEFAULT_DISTANCE_METRIC)
+            if dense_embedding_function is None:
+                # Schema() omits the optional wrapper configuration. Standard collections still
+                # use the documented default dense schema, while callers provide embeddings manually.
+                hnsw_config = HNSWConfiguration(dimension=DEFAULT_VECTOR_DIMENSION, distance=DEFAULT_DISTANCE_METRIC)
+            else:
+                actual_dimension = self._get_embedding_function_dimension(dense_embedding_function)
+                hnsw_config = HNSWConfiguration(dimension=actual_dimension, distance=DEFAULT_DISTANCE_METRIC)
         else:
             # Validate dimension matches embedding function if available
             if dense_embedding_function is not None:
                 actual_dimension = self._get_embedding_function_dimension(dense_embedding_function)
                 if hnsw_config.dimension != actual_dimension:
                     raise ValueError(
-                        f"Configuration dimension ({hnsw_config.dimension}) doesn't match "
+                        f"Schema dimension ({hnsw_config.dimension}) doesn't match "
                         f"embedding function dimension ({actual_dimension})."
                     )
 
@@ -1083,16 +845,11 @@ class BaseClient(BaseConnection, AdminAPI):
         )
 
         # Construct table name
-        collection_id = None
-        if kwargs.get("_collection_version", 2) == 1:
-            # for testing purpose
-            table_name = self._create_collection_meta_v1(name)
-        else:
-            collection_meta = self._create_collection_meta_v2(
-                name, dense_embedding_function, sparse_vector_index_config=sparse_vector_index_config
-            )
-            collection_id = collection_meta.get("collection_id")
-            table_name = collection_meta["table_name"]
+        collection_meta = self._create_collection_meta(
+            name, dense_embedding_function, sparse_vector_index_config=sparse_vector_index_config
+        )
+        collection_id = collection_meta.get("collection_id")
+        table_name = collection_meta["table_name"]
 
         # Construct CREATE TABLE SQL statement with HEAP organization
         sql = f"""CREATE TABLE IF NOT EXISTS `{table_name}` (
@@ -1117,11 +874,10 @@ class BaseClient(BaseConnection, AdminAPI):
             embedding_function=schema.vector_index.embedding_function,
             distance=hnsw_config.distance,
             sparse_vector_index_config=sparse_vector_index_config,
-            **kwargs,
         )
 
     def _create_namespace_collection(
-        self, name: str, schema: Schema, partition_count: int | None = None, **kwargs
+        self, name: str, schema: Schema, partition_count: int | None = None
     ) -> "Collection":
         """Create a namespace-enabled collection and its catalog/physical tables."""
         dense_embedding_function = schema.vector_index.embedding_function
@@ -1290,7 +1046,7 @@ class BaseClient(BaseConnection, AdminAPI):
         except Exception as e:
             raise ValueError(f"Failed to create sdk_collections table: {e}") from e
 
-    def _create_collection_meta_v2(
+    def _create_collection_meta(
         self,
         collection_name: str,
         embedding_function,
@@ -1344,16 +1100,8 @@ class BaseClient(BaseConnection, AdminAPI):
                 collection_id = self._get_collection_id(collection_name)
 
             results["collection_id"] = collection_id
-            results["table_name"] = CollectionNames.table_name_v2(collection_id)
+            results["table_name"] = CollectionNames.table_name(collection_id)
             return results  # noqa: TRY300
-        except Exception as e:
-            raise ValueError(f"Failed to create collection metadata: {e}") from e
-
-    def _create_collection_meta_v1(self, collection_name: str) -> str:
-        """Insert collection metadata using the legacy v1 catalog layout."""
-        try:
-            table_name = CollectionNames.table_name(collection_name)
-            return table_name  # noqa: TRY300
         except Exception as e:
             raise ValueError(f"Failed to create collection metadata: {e}") from e
 
@@ -2035,12 +1783,7 @@ class BaseClient(BaseConnection, AdminAPI):
                 ns_meta = None
             else:
                 return self._build_ns_collection_from_meta(ns_meta, embedding_function)
-        try:
-            collection = self._get_collection_v1(name, embedding_function)
-        except ValueError as e:
-            logger.debug(f"Failed to get collection v1: {e}, trying v2...")
-            collection = self._get_collection_v2(name, embedding_function)
-        return collection
+        return self._get_collection(name, embedding_function)
 
     def _build_ns_collection_from_meta(self, meta: dict, embedding_function=_NOT_PROVIDED) -> "Collection":
         """Build a namespace Collection facade from catalog metadata."""
@@ -2079,11 +1822,6 @@ class BaseClient(BaseConnection, AdminAPI):
             if rows:
                 return _CollectionMeta.from_row(rows[0])
 
-            # not a v2 collection
-            show_tables_sql = f"SHOW TABLES LIKE '{CollectionNames.table_name(collection_name)}'"
-            result = self._execute(show_tables_sql)
-            if result:
-                return _CollectionMeta(collection_id=None, collection_name=collection_name, settings=None)
         except Exception as e:
             raise ValueError(f"Failed to resolve collection metadata from sdk_collections table: {e}") from e
         return None
@@ -2171,7 +1909,7 @@ class BaseClient(BaseConnection, AdminAPI):
 
         return metadata
 
-    def _resolve_embedding_function(self, settings: str | None) -> EmbeddingFunction[EmbeddingDocuments]:
+    def _resolve_embedding_function(self, settings: str | None) -> EmbeddingFunction[EmbeddingDocuments] | None:
         """Resolve the embedding function to use for a collection."""
         if not settings:
             return None
@@ -2227,7 +1965,7 @@ class BaseClient(BaseConnection, AdminAPI):
         self,
         embedding_function: EmbeddingFunction | None,
         embedding_function_persistence: EmbeddingFunction | None,
-    ) -> EmbeddingFunction[EmbeddingDocuments]:
+    ) -> EmbeddingFunction[EmbeddingDocuments] | None:
         """
         Validate embedding function
 
@@ -2236,7 +1974,7 @@ class BaseClient(BaseConnection, AdminAPI):
             embedding_function_persistence: Embedding function restored from table metadata
 
         Returns:
-            Embedding function
+            Persisted or supplied embedding function, or None when the collection has no dense EF.
         """
 
         if embedding_function_persistence is not None and embedding_function is not _NOT_PROVIDED:
@@ -2247,16 +1985,14 @@ class BaseClient(BaseConnection, AdminAPI):
             else:
                 return embedding_function_persistence
         if embedding_function is _NOT_PROVIDED:
-            return (
-                embedding_function_persistence
-                if embedding_function_persistence is not None
-                else get_default_embedding_function()
-            )
+            if embedding_function_persistence is not None:
+                return embedding_function_persistence
+            return None
         else:
             return embedding_function
 
-    def _get_collection_v2(self, name: str, embedding_function: EmbeddingFunctionParam = _NOT_PROVIDED) -> "Collection":
-        """Fetch a collection using the v2 catalog layout."""
+    def _get_collection(self, name: str, embedding_function: EmbeddingFunctionParam = _NOT_PROVIDED) -> "Collection":
+        """Fetch a collection using the SDK catalog layout."""
         collection_meta = self._resolve_collection_metadata_from_sdk_collections(name)
         if not collection_meta or not collection_meta.collection_id:
             raise ValueError(f"Collection '{name}' does not exist")
@@ -2265,7 +2001,7 @@ class BaseClient(BaseConnection, AdminAPI):
             embedding_function_persistence = self._resolve_embedding_function(collection_meta.settings)
             embedding_function = self._validate_embedding_function(embedding_function, embedding_function_persistence)
             metadata = self._resolve_collection_metadata_from_table(
-                CollectionNames.table_name_v2(collection_meta.collection_id), name
+                CollectionNames.table_name(collection_meta.collection_id), name
             )
 
             # Resolve sparse vector index config from persisted settings
@@ -2283,35 +2019,6 @@ class BaseClient(BaseConnection, AdminAPI):
         except Exception as e:
             raise ValueError(f"Failed to get collection: {e}") from e
 
-    def _get_collection_v1(self, name: str, embedding_function: EmbeddingFunctionParam = _NOT_PROVIDED) -> "Collection":
-        """
-        Get a collection object (user-facing API)
-
-        Args:
-            name: Collection name
-            embedding_function: Embedding function to convert documents to embeddings.
-                               Defaults to DefaultEmbeddingFunction.
-                               If explicitly set to None, collection will not have an embedding function.
-
-        Returns:
-            Collection object
-
-        Raises:
-            ValueError: If collection does not exist
-        """
-        # Construct table name
-        table_name = CollectionNames.table_name(name)
-
-        metadata = self._resolve_collection_metadata_from_table(table_name, name)
-
-        # Handle embedding function
-        # If not provided (sentinel), use default embedding function
-        if embedding_function is _NOT_PROVIDED:
-            embedding_function = get_default_embedding_function()
-
-        # Create and return Collection object
-        return Collection(client=self, name=name, embedding_function=embedding_function, **metadata)
-
     def delete_collection(self, name: str) -> None:
         """Delete a collection.
 
@@ -2328,48 +2035,24 @@ class BaseClient(BaseConnection, AdminAPI):
             self._delete_ns_collection_meta(name)
             logger.debug(f"Deleted namespace collection '{name}'")
             return
-        try:
-            self._delete_collection_v2(name)
-            logger.debug(f"✅ Successfully deleted collection v2 '{name}' from sdk_collections table")
-        except ValueError:
-            self._delete_collection_v1(name)
-            logger.debug(f"✅ Successfully deleted collection v1 '{name}' from table")
+        self._delete_collection(name)
+        logger.debug(f"✅ Successfully deleted collection '{name}' from sdk_collections table")
 
-    def _delete_collection_v2(self, name: str) -> None:
+    def _delete_collection(self, name: str) -> None:
         """
         Delete a collection (user-facing API)
 
         Args:
             name: Collection name
         """
-        collection = self._get_collection_v2(name)
+        collection = self._get_collection(name)
         if not collection:
             raise ValueError(f"Collection '{name}' does not exist")
-        drop_table_sql = f"DROP TABLE `{CollectionNames.table_name_v2(collection.id)}`"
+        drop_table_sql = f"DROP TABLE `{CollectionNames.table_name(collection.id)}`"
         query_sql = f"DELETE FROM `{CollectionNames.sdk_collections_table_name()}` WHERE COLLECTION_NAME = '{name}'"
         self._execute(drop_table_sql)
         self._execute(query_sql)
         logger.debug(f"✅ Successfully deleted collection '{name}' from sdk_collections table")
-
-    def _delete_collection_v1(self, name: str) -> None:
-        """
-        Delete a collection (user-facing API)
-
-        Args:
-            name: Collection name
-
-        Raises:
-            ValueError: If collection does not exist
-        """
-        # Construct table name
-        table_name = CollectionNames.table_name(name)
-
-        # Check if table exists first
-        if not self._has_collection_v1(name):
-            raise ValueError(f"Collection '{name}' does not exist")
-
-        # Execute DROP TABLE SQL
-        self._execute(f"DROP TABLE IF EXISTS `{table_name}`")
 
     def list_collections(self) -> list["Collection"]:
         """List all collections in the database.
@@ -2383,8 +2066,7 @@ class BaseClient(BaseConnection, AdminAPI):
             ...     print(col.name)
         """
         collections = self._list_ns_collections()
-        collections.extend(self._list_collections_v1())
-        collections.extend(self._list_collections_v2())
+        collections.extend(self._list_collections())
         return collections
 
     def _list_ns_collections(self) -> list["Collection"]:
@@ -2424,8 +2106,8 @@ class BaseClient(BaseConnection, AdminAPI):
             logger.debug("Failed to list namespace collections from catalog", exc_info=True)
         return result
 
-    def _list_collections_v2(self) -> list["Collection"]:
-        """List collections using the v2 catalog layout."""
+    def _list_collections(self) -> list["Collection"]:
+        """List standard collections using the SDK catalog layout."""
         collections = []
         try:
             # Detect if the sdk_collections table exists before querying it
@@ -2473,64 +2155,6 @@ class BaseClient(BaseConnection, AdminAPI):
             raise ValueError(f"Failed to list collections: {e}") from e
         return collections
 
-    def _list_collections_v1(self) -> list["Collection"]:
-        """
-        List all collections from table names that start with collection prefix
-
-        Returns:
-            List of Collection objects
-        """
-        # List all tables that start with collection prefix
-        # Use SHOW TABLES LIKE pattern to filter collection tables
-        pattern = CollectionNames.table_pattern()
-        try:
-            tables = self._execute(f"SHOW TABLES LIKE '{pattern}'")
-        except Exception:
-            # Fallback: try to query information_schema
-            try:
-                # Get current database name
-                db_result = self._execute("SELECT DATABASE()")
-                if db_result and len(db_result) > 0:
-                    db_name = (
-                        db_result[0][0]
-                        if isinstance(db_result[0], (tuple, list))
-                        else db_result[0].get("DATABASE()", "")
-                    )
-                    tables = self._execute(
-                        f"SELECT TABLE_NAME FROM information_schema.TABLES "
-                        f"WHERE TABLE_SCHEMA = '{db_name}' AND TABLE_NAME LIKE '{pattern}'"
-                    )
-                else:
-                    return []
-            except Exception:
-                return []
-
-        collections = []
-        for row in tables:
-            # Extract table name
-            if isinstance(row, dict):
-                # Server client returns dict, get the first value
-                table_name = next(iter(row.values()), "")
-            elif isinstance(row, (tuple, list)):
-                # Embedded client returns tuple, first element is table name
-                table_name = row[0] if len(row) > 0 else ""
-            else:
-                table_name = str(row)
-
-            # Extract collection name from table name
-            if CollectionNames.is_collection_table(table_name):
-                collection_name = CollectionNames.collection_name(table_name)
-
-                # Get collection with dimension
-                try:
-                    collection = self.get_collection(collection_name)
-                    collections.append(collection)
-                except Exception as e:
-                    logger.debug(f"Failed to get collection '{collection_name}': {e}")
-                    continue
-
-        return collections
-
     def count_collection(self) -> int:
         """Count the total number of collections.
 
@@ -2557,7 +2181,7 @@ class BaseClient(BaseConnection, AdminAPI):
             >>> if client.has_collection("my_collection"):
             ...     print("Collection exists!")
         """
-        return self._has_ns_collection(name) or self._has_collection_v2(name) or self._has_collection_v1(name)
+        return self._has_ns_collection(name) or self._has_collection(name)
 
     def _collection_table_exists(self, table_name: str) -> bool:
         """Return whether the physical table for a collection exists."""
@@ -2567,8 +2191,8 @@ class BaseClient(BaseConnection, AdminAPI):
         except Exception:
             return False
 
-    def _has_collection_v2(self, name: str) -> bool:
-        """Return whether a collection exists using the v2 catalog layout."""
+    def _has_collection(self, name: str) -> bool:
+        """Return whether a standard collection exists in the SDK catalog."""
         try:
             name_escaped = escape_string(name)
             query_sql = (
@@ -2584,79 +2208,45 @@ class BaseClient(BaseConnection, AdminAPI):
             if not collection_id:
                 return False
 
-            return self._collection_table_exists(CollectionNames.table_name_v2(collection_id))
+            return self._collection_table_exists(CollectionNames.table_name(collection_id))
         except Exception:
-            return False
-
-    def _has_collection_v1(self, name: str) -> bool:
-        """
-        Check if a collection exists
-
-        Args:
-            name: Collection name
-
-        Returns:
-            True if exists, False otherwise
-        """
-        # Construct table name
-        table_name = CollectionNames.table_name(name)
-
-        # Check if table exists
-        try:
-            # Try to describe the table
-            table_info = self._execute(f"DESCRIBE `{table_name}`")
-            return table_info is not None and len(table_info) > 0
-        except Exception:
-            # If DESCRIBE fails, table doesn't exist
             return False
 
     def get_or_create_collection(
         self,
         name: str,
         schema: Schema | None = None,
-        configuration: ConfigurationParam = _NOT_PROVIDED,
-        embedding_function: EmbeddingFunctionParam = _NOT_PROVIDED,
         use_namespace: bool = False,
-        **kwargs,
     ) -> "Collection":
         """Get a collection if it exists, otherwise create it.
 
         Args:
             name: The name of the collection.
-            schema: Schema configuration for fine-grained index control, including
-                   sparse vector index support. When provided, ``configuration`` and
-                   ``embedding_function`` parameters are ignored.
-            configuration: Index configuration. Defaults to None (uses HNSW with
-                Cosine distance and dimension 384). Can be a ``Configuration`` or
-                ``HNSWConfiguration`` object. If set to None, the dimension will be
-                inferred from the embedding function. Ignored if ``schema`` is provided.
-            embedding_function: The embedding function to use for this collection.
-                Defaults to ``DefaultEmbeddingFunction`` (all-MiniLM-L6-v2). If set to None,
-                no embedding function will be used (embeddings must be provided manually).
-                Ignored if ``schema`` is provided.
+            schema: Schema configuration for fine-grained control of dense, sparse,
+                full-text, and embedding-function settings.
             use_namespace: If True, create a namespace-enabled collection. Defaults to False.
-            **kwargs: Additional parameters passed to ``create_collection`` if the collection is created.
 
         Returns:
             The existing or newly created ``Collection`` object.
 
         Raises:
-            ValueError: If the configuration/embedding function combination is invalid (e.g., dimension mismatch).
+            ValueError: If the schema/embedding function combination is invalid (e.g., dimension mismatch).
 
         Examples:
-            >>> collection = client.get_or_create_collection("my_collection")
+            >>> schema = Schema(
+            ...     vector_index=VectorIndexConfig(hnsw=HNSWConfiguration(dimension=384))
+            ... )
+            >>> collection = client.get_or_create_collection("my_collection", schema=schema)
         """
         _validate_collection_name(name)
+        embedding_function = schema.vector_index.embedding_function if schema is not None else _NOT_PROVIDED
 
         if self.has_collection(name):
             if use_namespace and self._is_incomplete_ns_collection(name):
                 return self.create_collection(
                     name=name,
                     schema=schema,
-                    configuration=configuration,
-                    embedding_function=embedding_function,
                     use_namespace=use_namespace,
-                    **kwargs,
                 )
             self._assert_get_or_create_namespace_mode_matches(name, use_namespace)
             return self.get_collection(name, embedding_function=embedding_function)
@@ -2665,20 +2255,14 @@ class BaseClient(BaseConnection, AdminAPI):
             return self.create_collection(
                 name=name,
                 schema=schema,
-                configuration=configuration,
-                embedding_function=embedding_function,
                 use_namespace=use_namespace,
-                **kwargs,
             )
         except Exception as exc:
             if _is_collection_conflict_error(exc):
                 return self._get_or_resume_existing_collection(
                     name,
                     schema=schema,
-                    configuration=configuration,
-                    embedding_function=embedding_function,
                     use_namespace=use_namespace,
-                    **kwargs,
                 )
             raise
 
@@ -2687,10 +2271,7 @@ class BaseClient(BaseConnection, AdminAPI):
         name: str,
         *,
         schema: Schema | None,
-        configuration: ConfigurationParam,
-        embedding_function: EmbeddingFunctionParam,
         use_namespace: bool,
-        **kwargs,
     ) -> "Collection":
         """Return an existing collection or resume an incomplete namespace-enabled one."""
         if use_namespace:
@@ -2700,12 +2281,10 @@ class BaseClient(BaseConnection, AdminAPI):
                 return self.create_collection(
                     name=name,
                     schema=schema,
-                    configuration=configuration,
-                    embedding_function=embedding_function,
                     use_namespace=use_namespace,
-                    **kwargs,
                 )
         self._assert_get_or_create_namespace_mode_matches(name, use_namespace)
+        embedding_function = schema.vector_index.embedding_function if schema is not None else _NOT_PROVIDED
         return self.get_collection(name, embedding_function=embedding_function)
 
     def _assert_get_or_create_namespace_mode_matches(self, name: str, use_namespace: bool) -> None:
@@ -2721,12 +2300,10 @@ class BaseClient(BaseConnection, AdminAPI):
         )
 
     def _get_collection_table_name(self, collection_id: str | None, collection_name: str) -> str:
-        """
-        Get collection table name
-        """
-        if collection_id:
-            return CollectionNames.table_name_v2(collection_id)
-        return CollectionNames.table_name(collection_name)
+        """Return the v2 physical table name for a collection."""
+        if not collection_id:
+            collection_id = self._get_collection_id(collection_name)
+        return CollectionNames.table_name(collection_id)
 
     def _fork_table_enabled(self) -> bool:
         """Return whether table fork is enabled on the backend."""
@@ -2793,7 +2370,7 @@ class BaseClient(BaseConnection, AdminAPI):
         if self.has_collection(forked_name):
             raise ValueError(f"Collection '{forked_name}' already exists")
 
-        # Ensure sdk_collections exists (especially for v1-only databases)
+        # Ensure sdk_collections exists before creating the fork metadata.
         self._create_sdk_collections_if_not_exists()
 
         source_table_name = self._get_collection_table_name(collection.id, collection.name)
@@ -2808,7 +2385,7 @@ class BaseClient(BaseConnection, AdminAPI):
             insert_sql = f"INSERT INTO `{CollectionNames.sdk_collections_table_name()}` (COLLECTION_NAME, SETTINGS) VALUES ('{forked_name}', {settings_str})"
             self._execute(insert_sql)
             collection_id = self._get_collection_id(forked_name)
-            forked_table_name = CollectionNames.table_name_v2(collection_id)
+            forked_table_name = CollectionNames.table_name(collection_id)
 
             fork_table_sql = f"FORK TABLE `{source_table_name}` TO `{forked_table_name}`"
             self._execute(fork_table_sql)
@@ -2958,10 +2535,8 @@ class BaseClient(BaseConnection, AdminAPI):
         #    - If embedding_function is provided, use it to generate embeddings from documents
         #    - If embedding_function is not provided, raise an error
         # 3. If neither embeddings nor documents are provided, raise an error
-        # NOTE: The embedding_function is passed through `get_collection` and `create_collection` parameters.
-        # If embedding_function parameter passed in `get_collection` and `create_collection` is None,
-        # then the embedding function is not provided. If developers passed through `_NOT_PROVIDED` (default value),
-        # then the embedding function is the default embedding function.
+        # An omitted embedding function is normalized to None when the collection has an
+        # explicit dense dimension; documents without explicit embeddings still require an EF.
 
         if embeddings:
             # embeddings provided, use them directly without embedding
@@ -3016,10 +2591,7 @@ class BaseClient(BaseConnection, AdminAPI):
             raise ValueError(f"Number of embeddings ({len(embeddings)}) does not match number of items ({num_items})")
 
         # Get table name
-        if collection_id:
-            table_name = CollectionNames.table_name_v2(collection_id)
-        else:
-            table_name = CollectionNames.table_name(collection_name)
+        table_name = self._get_collection_table_name(collection_id, collection_name)
 
         # Handle sparse embeddings generation
         sparse_config = kwargs.get("sparse_vector_index_config")
@@ -3187,10 +2759,7 @@ class BaseClient(BaseConnection, AdminAPI):
             raise ValueError(f"Number of embeddings ({len(embeddings)}) does not match number of ids ({len(ids)})")
 
         # Get table name
-        if collection_id:
-            table_name = CollectionNames.table_name_v2(collection_id)
-        else:
-            table_name = CollectionNames.table_name(collection_name)
+        table_name = self._get_collection_table_name(collection_id, collection_name)
 
         # Handle sparse embeddings generation
         sparse_config = kwargs.get("sparse_vector_index_config")
@@ -3342,10 +2911,7 @@ class BaseClient(BaseConnection, AdminAPI):
             raise ValueError(f"Number of embeddings ({len(embeddings)}) does not match number of ids ({len(ids)})")
 
         # Get table name
-        if collection_id:
-            table_name = CollectionNames.table_name_v2(collection_id)
-        else:
-            table_name = CollectionNames.table_name(collection_name)
+        table_name = self._get_collection_table_name(collection_id, collection_name)
 
         # Handle sparse embeddings generation
         sparse_config = kwargs.get("sparse_vector_index_config")
@@ -3483,10 +3049,7 @@ class BaseClient(BaseConnection, AdminAPI):
             id_list = [ids] if isinstance(ids, str) else ids
 
         # Get table name
-        if collection_id:
-            table_name = CollectionNames.table_name_v2(collection_id)
-        else:
-            table_name = CollectionNames.table_name(collection_name)
+        table_name = self._get_collection_table_name(collection_id, collection_name)
 
         # Build WHERE clause
         where_clause, params = self._build_where_clause(where, where_document, id_list)
@@ -3960,10 +3523,7 @@ class BaseClient(BaseConnection, AdminAPI):
         conn = self._ensure_connection()
 
         # Convert collection name to table name
-        if collection_id:
-            table_name = CollectionNames.table_name_v2(collection_id)
-        else:
-            table_name = CollectionNames.table_name(collection_name)
+        table_name = self._get_collection_table_name(collection_id, collection_name)
 
         # Check if this is a sparse vector query
         sparse_config = kwargs.get("sparse_vector_index_config")
@@ -4334,10 +3894,7 @@ class BaseClient(BaseConnection, AdminAPI):
         conn = self._ensure_connection()
 
         # Convert collection name to table name
-        if collection_id:
-            table_name = CollectionNames.table_name_v2(collection_id)
-        else:
-            table_name = CollectionNames.table_name(collection_name)
+        table_name = self._get_collection_table_name(collection_id, collection_name)
 
         # Set defaults
         if limit is None:
@@ -4469,10 +4026,7 @@ class BaseClient(BaseConnection, AdminAPI):
         conn = self._ensure_connection()
 
         # Build table name
-        if collection_id:
-            table_name = CollectionNames.table_name_v2(collection_id)
-        else:
-            table_name = CollectionNames.table_name(collection_name)
+        table_name = self._get_collection_table_name(collection_id, collection_name)
 
         # Build search_parm JSON
         search_parm = self._build_search_parm(
@@ -5261,10 +4815,7 @@ class BaseClient(BaseConnection, AdminAPI):
         conn = self._ensure_connection()
 
         # Convert collection name to table name
-        if collection_id:
-            table_name = CollectionNames.table_name_v2(collection_id)
-        else:
-            table_name = CollectionNames.table_name(collection_name)
+        table_name = self._get_collection_table_name(collection_id, collection_name)
 
         # Execute COUNT query
         sql = f"SELECT COUNT(*) as cnt FROM `{table_name}`"

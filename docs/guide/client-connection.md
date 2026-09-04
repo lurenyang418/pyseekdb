@@ -1,28 +1,10 @@
 # 1. Client Connection
 
-The `Client` class provides a unified interface for connecting to seekdb in different modes. It automatically selects the appropriate connection mode based on the parameters provided.
+The `Client` class connects to a remote seekdb Server or OceanBase Server over pymysql.
+The `host` parameter (and typically `port`, `user`, `password`) is required; embedded
+mode was removed in pyseekdb 2.0.
 
-## 1.1 Embedded seekdb Client
-
-Connect to a local embedded seekdb instance:
-
-```python
-import pyseekdb
-
-# Create embedded client with explicit path
-client = pyseekdb.Client(
-    path="./seekdb",      # Path to seekdb data directory
-    database="demo"        # Database name
-)
-
-# Create embedded client with default path (current working directory)
-# If path is not provided, uses seekdb.db in the current process working directory
-client = pyseekdb.Client(
-    database="demo"        # Database name (path defaults to current working directory/seekdb.db)
-)
-```
-
-## 1.2 Remote Server Client
+## 1.1 Remote Server Client
 
 Connect to a remote server (supports both seekdb Server and OceanBase Server):
 
@@ -31,7 +13,7 @@ import pyseekdb
 
 # Create remote server client (seekdb Server)
 client = pyseekdb.Client(
-    host="127.0.0.1",      # Server host
+    host="127.0.0.1",      # Server host (required)
     port=2881,              # Server port (default: 2881)
     database="demo",        # Database name
     user="root",            # Username (default: "root")
@@ -40,7 +22,7 @@ client = pyseekdb.Client(
 
 # Create remote server client (OceanBase Server)
 client = pyseekdb.Client(
-    host="127.0.0.1",      # Server host
+    host="127.0.0.1",      # Server host (required)
     port=2881,              # Server port (default: 2881)
     tenant="sys",          # Tenant name (default: sys)
     database="demo",       # Database name
@@ -66,7 +48,7 @@ client = pyseekdb.Client(
 )
 ```
 
-## 1.3 Client Methods and Properties
+## 1.2 Client Methods and Properties
 
 | Method / Property     | Description                                                    |
 |-----------------------|----------------------------------------------------------------|

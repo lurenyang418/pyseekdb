@@ -11,7 +11,6 @@ often provide more predictable matching results, especially in specialized domai
 
 from __future__ import annotations
 
-import contextlib
 import logging
 import math
 from abc import abstractmethod
@@ -273,21 +272,14 @@ class SparseEmbeddingFunctionRegistry:
 
     @classmethod
     def _initialize(cls) -> None:
-        """Initialize the registry with built-in sparse embedding functions."""
+        """Mark the registry as initialized. Built-in sparse embedding functions are no longer
+        bundled with pyseekdb (since 2.0); users must register their own implementations via
+        ``@register_sparse_embedding_function``.
+        """
         if cls._initialized:
             return
 
         cls._initialized = True
-
-        with contextlib.suppress(ImportError, ValueError):
-            from pyseekdb.utils.embedding_functions.huggingface_sparse_embedding_function import (
-                HuggingFaceSparseEmbeddingFunction,  # noqa: F401
-            )
-
-        with contextlib.suppress(ImportError, ValueError):
-            from pyseekdb.utils.embedding_functions.bm25_sparse_embedding_function import (
-                BM25SparseEmbeddingFunction,  # noqa: F401
-            )
 
     @classmethod
     def register(cls, sparse_embedding_function_class: type) -> None:

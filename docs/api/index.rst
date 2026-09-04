@@ -11,17 +11,26 @@ Main Package
    :undoc-members:
    :show-inheritance:
 
-Utility Modules
----------------
-
 Embedding Functions
-~~~~~~~~~~~~~~~~~~~
+-------------------
 
-The following embedding function classes are available in ``pyseekdb.utils.embedding_functions``:
+Since pyseekdb 2.0 no embedding function implementations are bundled. Users
+implement the ``EmbeddingFunction`` / ``SparseEmbeddingFunction`` protocols or
+register their own classes via ``@register_embedding_function`` and
+``@register_sparse_embedding_function``.
 
-.. autosummary::
-   :toctree: generated
-   :template: module.rst
-   :recursive:
+Embedding Protocol
+~~~~~~~~~~~~~~~~~~
 
-   pyseekdb.utils.embedding_functions
+.. automodule:: pyseekdb.client.embedding_function
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Sparse Embedding Protocol
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: pyseekdb.client.sparse_embedding_function
+   :members:
+   :undoc-members:
+   :show-inheritance:

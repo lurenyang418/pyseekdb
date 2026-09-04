@@ -1,24 +1,49 @@
 # 6. Embedding Functions
 
-Embedding functions convert text documents into vector embeddings for similarity search. pyseekdb supports both built-in and custom embedding functions.
+Embedding functions convert text documents into vector embeddings for similarity search. Since
+pyseekdb 2.0 no embedding function implementations are bundled. You supply your own by
+implementing the `EmbeddingFunction` protocol or by installing a third-party package that
+registers one.
 
-## 6.1 Default Embedding Function
-
-The `DefaultEmbeddingFunction` uses all-MiniLM-L6-v2 and is the default embedding function if none is specified.
+## 6.1 Implementing the Protocol
 
 ```python
-from pyseekdb import DefaultEmbeddingFunction
+from typing import Any
+from pyseekdb.client.embedding_function import (
+    Documents,
+    EmbeddingFunction,
+    Embeddings,
+    register_embedding_function,
+)
 
-# Use default model (all-MiniLM-L6-v2, 384 dimensions)
-ef = DefaultEmbeddingFunction()
 
-# Use custom model
-ef = DefaultEmbeddingFunction(model_name='all-MiniLM-L6-v2')
+@register_embedding_function
+class MyDenseEmbeddingFunction(EmbeddingFunction[Documents]):
+    """A minimal embedding function that returns zero vectors of fixed dimension."""
 
-# Get embedding dimension
-print(f"Dimension: {ef.dimension}")  # 384
+    def __init__(self, dimension: int = 384) -> None:
+        self.dimension = dimension
 
-# Generate embeddings
+    def __call__(self, input: Documents) -> Embeddings:
+        if isinstance(input, str):
+            input = [input]
+        return [[0.0] * self.dimension for _ in input]
+
+    @staticmethod
+    def name() -> str:
+        return "my_dense_ef"
+
+    def get_config(self) -> dict[str, Any]:
+        return {"dimension": self.dimension}
+
+    @staticmethod
+    def build_from_config(config: dict[str, Any]) -> "MyDenseEmbeddingFunction":
+        return MyDenseEmbeddingFunction(dimension=config.get("dimension", 384))
+
+
+ef = MyDenseEmbeddingFunction(dimension=384)
+print(f"Dimension: {ef.dimension}")
+
 embeddings = ef(["Hello world", "How are you?"])
 print(f"Generated {len(embeddings)} embeddings, each with {len(embeddings[0])} dimensions")
 ```
@@ -110,17 +135,19 @@ class SentenceTransformerCustomEmbeddingFunction(EmbeddingFunction[Documents]):
         return [embedding.tolist() for embedding in embeddings]
 
 # Use the custom embedding function
-from pyseekdb import Configuration, HNSWConfiguration
+from pyseekdb import HNSWConfiguration, Schema, VectorIndexConfig
 ef = SentenceTransformerCustomEmbeddingFunction(
     model_name='all-MiniLM-L6-v2',
     device='cpu'
 )
 collection = client.create_collection(
     name="my_collection",
-    configuration=Configuration(
-        hnsw=HNSWConfiguration(dimension=384, distance='cosine')
+    schema=Schema(
+        vector_index=VectorIndexConfig(
+            hnsw=HNSWConfiguration(dimension=384, distance='cosine'),
+            embedding_function=ef,
+        )
     ),
-    embedding_function=ef
 )
 ```
 
@@ -195,17 +222,19 @@ class OpenAIEmbeddingFunction(EmbeddingFunction[Documents]):
         return embeddings
 
 # Use the custom embedding function
-from pyseekdb import Configuration, HNSWConfiguration
+from pyseekdb import HNSWConfiguration, Schema, VectorIndexConfig
 ef = OpenAIEmbeddingFunction(
     model_name='text-embedding-ada-002',
     api_key='your-api-key'
 )
 collection = client.create_collection(
     name="my_collection",
-    configuration=Configuration(
-        hnsw=HNSWConfiguration(dimension=1536, distance='cosine')
+    schema=Schema(
+        vector_index=VectorIndexConfig(
+            hnsw=HNSWConfiguration(dimension=1536, distance='cosine'),
+            embedding_function=ef,
+        )
     ),
-    embedding_function=ef
 )
 ```
 
@@ -232,16 +261,18 @@ When creating a custom embedding function, ensure:
 Once you've created a custom embedding function, use it when creating or getting collections:
 
 ```python
-from pyseekdb import Configuration, HNSWConfiguration
+from pyseekdb import HNSWConfiguration, Schema, VectorIndexConfig
 
 # Create collection with custom embedding function
 ef = MyCustomEmbeddingFunction()
 collection = client.create_collection(
     name="my_collection",
-    configuration=Configuration(
-        hnsw=HNSWConfiguration(dimension=ef.dimension, distance='cosine')
+    schema=Schema(
+        vector_index=VectorIndexConfig(
+            hnsw=HNSWConfiguration(dimension=ef.dimension, distance='cosine'),
+            embedding_function=ef,
+        )
     ),
-    embedding_function=ef
 )
 
 # Get collection with custom embedding function

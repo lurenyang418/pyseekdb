@@ -11,18 +11,18 @@ import uuid
 
 from pymysql.converters import escape_string
 
-from pyseekdb import HNSWConfiguration
+from pyseekdb import HNSWConfiguration, Schema
 
 
 class TestCollectionHybridSearchSourceInferenceRealDB:
     def _unique_collection_name(self, prefix: str) -> str:
         # Keep names short to avoid MySQL/OceanBase identifier length limits after
-        # internal table-name prefixing (e.g. "c$v1$...").
+        # Internal table-name prefixing keeps physical names independent of user names.
         return f"{prefix}_{uuid.uuid4().hex[:8]}"
 
     def _create_test_collection(self, client, collection_name: str, dimension: int = 3):
         config = HNSWConfiguration(dimension=dimension, distance="l2")
-        collection = client.create_collection(name=collection_name, configuration=config, embedding_function=None)
+        collection = client.create_collection(name=collection_name, schema=Schema(vector_index=config))
         return collection, collection.dimension
 
     def _generate_query_vector(self, dimension: int) -> list[float]:

@@ -14,6 +14,9 @@ from typing import Any
 
 import pytest
 
+import pyseekdb
+from tests.stubs import StubEmbeddingFunction
+
 
 class TestSecuritySQLInjection:
     """Security test class for SQL injection prevention"""
@@ -88,7 +91,7 @@ class TestSecuritySQLInjection:
         - Special characters (newlines, tabs)
         - Unicode and emoji
 
-        Automatically runs for: embedded, server, oceanbase
+        Automatically runs for: server, oceanbase
         """
         print("\n🔒 Running security SQL injection tests")
 
@@ -119,7 +122,10 @@ class TestSecuritySQLInjection:
         collection_name = f"security_{test_name}_collection"
 
         # Create new collection
-        collection = client.get_or_create_collection(name=collection_name)
+        collection = client.get_or_create_collection(
+            name=collection_name,
+            schema=pyseekdb.Schema(embedding_function=StubEmbeddingFunction(dimension=384)),
+        )
 
         try:
             # Run the test method

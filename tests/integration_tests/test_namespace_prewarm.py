@@ -1,7 +1,6 @@
 """
 Namespace prewarm integration tests.
 
-- embedded mode: prewarm raises ValueError
 - oceanbase SS mode: prewarm inserts hot_table record, repeat prewarm updates last_access_time
 """
 

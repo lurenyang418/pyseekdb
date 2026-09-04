@@ -4,6 +4,7 @@ Unit tests for configuration classes
 
 import sys
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -12,15 +13,19 @@ project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from pyseekdb import (  # noqa: E402
-    Configuration,
     FulltextIndexConfig,
     HNSWConfiguration,
     IKProperties,
     Ngram2Properties,
     NgramProperties,
+    Schema,
     SpaceProperties,
 )
-from pyseekdb.client.client_base import _get_vector_index_sql  # noqa: E402
+from pyseekdb.client.client_base import BaseClient, _get_vector_index_sql  # noqa: E402
+from pyseekdb.client.client_seekdb_server import RemoteServerClient  # noqa: E402
+from pyseekdb.client.configuration import IVFConfiguration, VectorIndexConfig  # noqa: E402
+from pyseekdb.client.embedding_function import EmbeddingFunction  # noqa: E402
+from pyseekdb.client.types import _NOT_PROVIDED  # noqa: E402
 
 
 class TestHNSWConfiguration:
@@ -229,36 +234,97 @@ class TestFulltextIndexConfig:
         assert config.properties["bool_param"] is True
 
 
-class TestConfiguration:
-    """Test Configuration class"""
+class _StubEmbeddingFunction(EmbeddingFunction):
+    """Tiny dense-vector EF for VectorIndexConfig validation tests."""
 
-    def test_configuration_with_hnsw_only(self):
-        """Test Configuration with only HNSW config"""
-        hnsw_config = HNSWConfiguration(dimension=128, distance="cosine")
-        config = Configuration(hnsw=hnsw_config)
-        assert config.hnsw == hnsw_config
-        assert config.fulltext_config is None
+    def __call__(self, documents):  # type: ignore[override]
+        docs = documents if isinstance(documents, list) else [documents]
+        return [[0.0] * 4 for _ in docs]
 
-    def test_configuration_with_fulltext_only(self):
-        """Test Configuration with only fulltext config"""
-        fulltext_config = FulltextIndexConfig(analyzer="ik")
-        config = Configuration(fulltext_config=fulltext_config)
+    def get_config(self) -> dict:
+        return {}
+
+    @staticmethod
+    def build_from_config(config):  # type: ignore[override]
+        return _StubEmbeddingFunction()
+
+    @staticmethod
+    def name() -> str:
+        return "stub"
+
+
+class TestVectorIndexConfigEmbeddingRequired:
+    """VectorIndexConfig no longer ships a default EF (since pyseekdb 2.0).
+
+    An EF is only required when no explicit ``dimension=`` is supplied on the
+    HNSW/IVF configuration; otherwise the dimension is unknown and the SDK
+    cannot infer the vector size.
+    """
+
+    def test_no_hnsw_no_ivf_no_ef_is_ok(self):
+        config = VectorIndexConfig()
+        assert config.embedding_function is None
         assert config.hnsw is None
-        assert config.fulltext_config == fulltext_config
+        assert config.ivf is None
 
-    def test_configuration_with_both(self):
-        """Test Configuration with both HNSW and fulltext config"""
-        hnsw_config = HNSWConfiguration(dimension=128, distance="cosine")
-        fulltext_config = FulltextIndexConfig(analyzer="space")
-        config = Configuration(hnsw=hnsw_config, fulltext_config=fulltext_config)
-        assert config.hnsw == hnsw_config
-        assert config.fulltext_config == fulltext_config
+    def test_hnsw_with_ef_is_ok(self):
+        config = VectorIndexConfig(
+            hnsw=HNSWConfiguration(dimension=4),
+            embedding_function=_StubEmbeddingFunction(),
+        )
+        assert config.hnsw is not None
+        assert config.embedding_function is not None
 
-    def test_configuration_empty(self):
-        """Test Configuration with no parameters"""
-        config = Configuration()
-        assert config.hnsw is None
-        assert config.fulltext_config is None
+    def test_hnsw_with_explicit_dimension_no_ef_is_ok(self):
+        """Explicit dimension removes the need for an EF."""
+        config = VectorIndexConfig(hnsw=HNSWConfiguration(dimension=4))
+        assert config.hnsw is not None
+        assert config.embedding_function is None
+
+    def test_ivf_with_explicit_dimension_no_ef_is_ok(self):
+        """Explicit dimension removes the need for an EF."""
+        config = VectorIndexConfig(ivf=IVFConfiguration(dimension=4))
+        assert config.ivf is not None
+        assert config.embedding_function is None
+
+    def test_hnsw_without_dimension_or_ef_raises(self):
+        # Replace the default dimension with None to simulate "no dimension known".
+        hnsw = HNSWConfiguration()
+        hnsw.dimension = None
+        with pytest.raises(ValueError, match=r"requires an `embedding_function=`"):
+            VectorIndexConfig(hnsw=hnsw)
+
+    def test_ivf_without_dimension_or_ef_raises(self):
+        ivf = IVFConfiguration()
+        ivf.dimension = None
+        with pytest.raises(ValueError, match=r"requires an `embedding_function=`"):
+            VectorIndexConfig(ivf=ivf)
+
+    def test_remote_client_ping_executes_healthcheck_query(self):
+        client = RemoteServerClient.__new__(RemoteServerClient)
+        client._execute = MagicMock(return_value=[{"pyseekdb_ping": 1}])
+
+        assert client.ping()
+        client._execute.assert_called_once_with("SELECT 1 AS pyseekdb_ping")
+
+    def test_standard_schema_uses_default_dimension_without_ef(self):
+        client = MagicMock(spec=BaseClient)
+        client.has_collection.return_value = False
+        client._create_collection_meta.return_value = {
+            "collection_id": "collection-id",
+            "table_name": "table-name",
+        }
+
+        collection = BaseClient.create_collection(client, "items", schema=Schema())
+
+        assert collection.dimension == 384
+        create_sql = client._execute.call_args.args[0]
+        assert "embedding vector(384)" in create_sql
+
+    def test_missing_persisted_ef_is_optional_when_reopening(self):
+        client = MagicMock(spec=BaseClient)
+
+        assert BaseClient._validate_embedding_function(client, _NOT_PROVIDED, None) is None
 
 
 if __name__ == "__main__":

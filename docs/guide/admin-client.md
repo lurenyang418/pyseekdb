@@ -2,13 +2,10 @@
 
 The `AdminClient` class provides database management operations. It uses the same connection modes as `Client` but only exposes database management methods.
 
-## 2.1 Embedded/Server AdminClient
+## 2.1 Server AdminClient
 
 ```python
 import pyseekdb
-
-# Embedded mode - Database management
-admin = pyseekdb.AdminClient(path="./seekdb")
 
 # Remote server mode - Database management (seekdb Server)
 admin = pyseekdb.AdminClient(
@@ -33,14 +30,14 @@ admin = pyseekdb.AdminClient(
 
 | Method                    | Description                                        |
 |---------------------------|----------------------------------------------------|
-| `create_database(name, tenant=DEFAULT_TENANT)` | Create a new database (uses client's tenant for remote oceanbase server mode) |
-| `get_database(name, tenant=DEFAULT_TENANT)`    | Get database object with metadata (uses client's tenant for remote oceanbase server mode) |
-| `delete_database(name, tenant=DEFAULT_TENANT)`  | Delete a database (uses client's tenant for remote oceanbase server mode) |
-| `list_databases(limit=None, offset=None, tenant=DEFAULT_TENANT)` | List all databases with optional pagination (uses client's tenant for remote oceanbase server mode) |
+| `create_database(name, tenant=DEFAULT_TENANT)` | Create a new database (uses client's tenant for OceanBase mode) |
+| `get_database(name, tenant=DEFAULT_TENANT)`    | Get database object with metadata (uses client's tenant for OceanBase mode) |
+| `delete_database(name, tenant=DEFAULT_TENANT)`  | Delete a database (uses client's tenant for OceanBase mode) |
+| `list_databases(limit=None, offset=None, tenant=DEFAULT_TENANT)` | List all databases with optional pagination (uses client's tenant for OceanBase mode) |
 
 **Parameters:**
 - `name` (str): Database name
-- `tenant` (str, optional): Tenant name (uses client's tenant if different, ignored for seekdb)
+- `tenant` (str, optional): Tenant name (uses client's tenant if different, ignored for seekdb Server)
 - `limit` (int, optional): Maximum number of results to return
 - `offset` (int, optional): Number of results to skip for pagination
 
@@ -49,7 +46,7 @@ admin = pyseekdb.AdminClient(
 The `get_database()` and `list_databases()` methods return `Database` objects with the following properties:
 
 - `name` (str): Database name
-- `tenant` (str, optional): Tenant name (None for embedded/server mode)
+- `tenant` (str, optional): Tenant name (None for seekdb Server mode)
 - `charset` (str, optional): Character set
 - `collation` (str, optional): Collation
 - `metadata` (dict): Additional metadata

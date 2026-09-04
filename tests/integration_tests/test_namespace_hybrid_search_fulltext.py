@@ -29,7 +29,7 @@ from namespace_fts_helpers import (
 class TestNamespaceHybridSearchFulltext:
     """Large-scale namespace pure full-text hybrid_search tests."""
 
-    # Keyed by db_client param (embedded / server / oceanbase).
+    # Keyed by db_client param (server / oceanbase).
     _shared_by_mode: ClassVar[dict[str, dict[str, Any]]] = {}
 
     @pytest.fixture(autouse=True)

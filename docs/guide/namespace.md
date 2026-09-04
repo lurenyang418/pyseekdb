@@ -36,7 +36,7 @@ If you omit `schema` with `use_namespace=True`, pyseekdb raises a clear error in
 
 **Not supported yet**
 
-- Default / HNSW schemas (`configuration=HNSWConfiguration(...)` without an IVF `Schema`)
+- Default / HNSW schemas (namespace collections require an IVF `Schema`)
 - `SparseVectorIndexConfig` on namespace collections
 
 ## 2. Manage namespaces
@@ -96,4 +96,3 @@ Namespace collections also expose `collection.hybrid_search(...)` across namespa
 
 - [Collection management](collection-management.md) — standard HNSW collections
 - [DML operations](dml.md) — `add` / `update` / `delete` on standard collections
-- `examples/namespace_example.py` — minimal runnable sample

@@ -10,9 +10,10 @@ from pyseekdb.client.sparse_embedding_function import SparseEmbeddingFunction
 from pyseekdb.client.types import _NOT_PROVIDED, K
 
 # Default configuration constants
-# Note: Default embedding function (DefaultEmbeddingFunction) produces 384-dim embeddings
-# So we use 384 as the default dimension to match
-DEFAULT_VECTOR_DIMENSION = 384  # Matches DefaultEmbeddingFunction dimension
+# When the dimension cannot be inferred from an `embedding_function=` argument, fall back to
+# a reasonable dense-vector size. Callers are encouraged to specify `dimension=` or pass an
+# `embedding_function=` explicitly (now required since pyseekdb 2.0).
+DEFAULT_VECTOR_DIMENSION = 384
 DEFAULT_DISTANCE_METRIC = "cosine"
 MAX_HNSW_VECTOR_DIMENSION = 4096
 # Namespace IVF uses logic_data_table with LOB_INROW_THRESHOLD sized for float32 vectors
@@ -435,7 +436,18 @@ class VectorIndexConfig:
         if self.ivf is not None and self.hnsw is not None:
             raise ValueError("Only one of ivf or hnsw can be configured")
         if self.embedding_function is _NOT_PROVIDED:
-            self.embedding_function = DefaultEmbeddingFunction()
+            self.embedding_function = None
+        # EF is only required when no explicit dimension was supplied on the index configuration.
+        needs_ef = (self.hnsw is not None and self.hnsw.dimension is None) or (
+            self.ivf is not None and self.ivf.dimension is None
+        )
+        if needs_ef and self.embedding_function is None:
+            raise ValueError(
+                "VectorIndexConfig requires an `embedding_function=` when an HNSW or IVF dense "
+                "index is configured without an explicit `dimension=`. Pass an EmbeddingFunction "
+                "instance (e.g. via `embedding_function=MyEF()`) so the vector dimension can be "
+                "inferred, or supply `dimension=` on the index configuration."
+            )
         if self.ivf is not None:
             self.ivf.__post_init__()
         if self.hnsw is not None:
@@ -564,27 +576,3 @@ class SparseVectorIndexConfig:
             return ("document", None)
         # Plain string refers to metadata field
         return ("metadata", self.source_key)
-
-
-class Configuration:
-    """
-    Configuration for collection creation
-
-    Args:
-        hnsw: HNSWConfiguration or None
-        fulltext_config: FulltextIndexConfig or None. If None, defaults to FulltextIndexConfig(analyzer='ik')
-    """
-
-    def __init__(
-        self,
-        hnsw: HNSWConfiguration | None = None,
-        fulltext_config: FulltextIndexConfig | None = None,
-    ):
-        """Initialize deprecated collection configuration wrapper."""
-        self.hnsw = hnsw
-        self.fulltext_config = fulltext_config
-        warnings.warn("Configuration is deprecated. Please use Schema instead.", DeprecationWarning, stacklevel=2)
-
-
-# Type alias for configuration parameter that can be HNSWConfiguration, None, or sentinel
-ConfigurationParam = Configuration | HNSWConfiguration | None

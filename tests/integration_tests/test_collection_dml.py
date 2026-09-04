@@ -18,7 +18,7 @@ class TestCollectionDML:
         """
         Test collection DML operations (add, update, upsert, delete).
 
-        Automatically runs for: embedded, server, oceanbase
+        Automatically runs for: server, oceanbase
         """
         # Create test collection using execute
         collection_name = f"test_dml_{int(time.time() * 1000)}"
@@ -27,8 +27,7 @@ class TestCollectionDML:
         # Get collection object
         collection = db_client.get_or_create_collection(
             name=collection_name,
-            configuration=pyseekdb.HNSWConfiguration(dimension=dimension),
-            embedding_function=None,
+            schema=pyseekdb.Schema(vector_index=pyseekdb.HNSWConfiguration(dimension=dimension)),
         )
 
         # Test 1: collection.add - Add single item

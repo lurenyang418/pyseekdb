@@ -1,6 +1,6 @@
 """
 Client creation and connection tests using db_client fixture
-Testing client creation, connection, and collection management for all three modes
+Testing client creation, connection, and collection management for server and oceanbase modes
 """
 
 import contextlib
@@ -10,7 +10,7 @@ import uuid
 
 import pytest
 
-from pyseekdb import Configuration, FulltextIndexConfig, HNSWConfiguration
+from pyseekdb import FulltextIndexConfig, HNSWConfiguration, Schema, VectorIndexConfig
 
 
 class TestClientCreation:
@@ -25,7 +25,7 @@ class TestClientCreation:
         - get_or_create_collection, list_collections, delete_collection
         - count_collection, collection.count(), collection.peek()
 
-        Automatically runs for: embedded, server, oceanbase
+        Automatically runs for: server, oceanbase
         """
         # Verify client is properly initialized
         assert db_client is not None
@@ -38,22 +38,21 @@ class TestClientCreation:
 
         # Create collection with HNSW configuration
         config = HNSWConfiguration(dimension=test_dimension, distance="cosine")
-        collection = db_client.create_collection(
-            name=test_collection_name, configuration=config, embedding_function=None
-        )
+        collection = db_client.create_collection(name=test_collection_name, schema=Schema(vector_index=config))
 
-        # Test: Verify Configuration class with fulltext parser works
+        # Test: Verify Schema with a fulltext parser works
         test_collection_name_config = f"test_collection_config_{int(time.time() * 1000)}"
-        config_with_fulltext = Configuration(
-            hnsw=HNSWConfiguration(
-                dimension=test_dimension, distance="cosine", properties={"M": 16, "ef_construction": 400}
+        schema_with_fulltext = Schema(
+            vector_index=VectorIndexConfig(
+                hnsw=HNSWConfiguration(
+                    dimension=test_dimension, distance="cosine", properties={"M": 16, "ef_construction": 400}
+                )
             ),
-            fulltext_config=FulltextIndexConfig(analyzer="ik"),
+            fulltext_index=FulltextIndexConfig(analyzer="ik"),
         )
         collection_config = db_client.create_collection(
             name=test_collection_name_config,
-            configuration=config_with_fulltext,
-            embedding_function=None,
+            schema=schema_with_fulltext,
         )
         assert collection_config is not None
         assert collection_config.name == test_collection_name_config
@@ -87,7 +86,7 @@ class TestClientCreation:
 
         # Test 5: get_or_create_collection - should get existing collection
         existing_collection = db_client.get_or_create_collection(
-            name=test_collection_name, configuration=config, embedding_function=None
+            name=test_collection_name, schema=Schema(vector_index=config)
         )
         assert existing_collection is not None
         assert existing_collection.name == test_collection_name
@@ -98,8 +97,7 @@ class TestClientCreation:
         test_collection_name_mgmt = f"test_collection_mgmt_{int(time.time() * 1000)}"
         new_collection = db_client.get_or_create_collection(
             name=test_collection_name_mgmt,
-            configuration=config,
-            embedding_function=None,
+            schema=Schema(vector_index=config),
         )
         assert new_collection is not None
         assert new_collection.name == test_collection_name_mgmt
@@ -128,12 +126,15 @@ class TestClientCreation:
             assert "does not exist" in str(e)
             print("\n✅ delete_collection correctly raises ValueError for non-existent collection")
 
-        # Test 10: get_or_create_collection without configuration - should use default configuration
+        # Test 10: get_or_create_collection with an explicit default dimension and no dense EF
         test_collection_name_default = f"test_collection_default_{int(time.time() * 1000)}"
-        default_collection = db_client.get_or_create_collection(name=test_collection_name_default)
+        default_collection = db_client.get_or_create_collection(
+            name=test_collection_name_default,
+            schema=Schema(vector_index=HNSWConfiguration(dimension=384)),
+        )
         assert default_collection is not None
         assert default_collection.name == test_collection_name_default
-        # Default dimension is 384 (matches default embedding function)
+        # The default dense schema uses a 384-dimensional vector column.
         assert default_collection.dimension == 384
         print("\n✅ get_or_create_collection successfully created collection with default configuration")
 

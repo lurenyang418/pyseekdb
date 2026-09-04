@@ -1,11 +1,10 @@
 """
-Embedding function interface and implementations
+Embedding function protocol and registry
 
-This module provides the EmbeddingFunction protocol and default implementations
-for converting text documents to vector embeddings.
+This module provides the EmbeddingFunction protocol and registry for custom
+text-to-vector embedding implementations.
 """
 
-import importlib
 import logging
 from abc import abstractmethod
 from typing import (
@@ -126,31 +125,6 @@ def dimension_of(embedding_function: EmbeddingFunction[D]) -> int:
             raise ValueError("Embedding function returned empty result when called with 'seekdb'")
 
 
-def get_default_embedding_function():
-    """
-    Get or create the default embedding function instance.
-
-    The DefaultEmbeddingFunction is an optional feature. Requires the
-    ``default-embedding`` extra to be installed: ``pip install pyseekdb[default-embedding]``
-
-    Returns:
-        DefaultEmbeddingFunction instance
-
-    Raises:
-        ImportError: If pyseekdb[default-embedding] is not installed.
-    """
-    try:
-        from pyseekdb.utils.embedding_functions.default_embedding_function import (
-            get_default_embedding_function as _impl,
-        )
-        return _impl()
-    except (ImportError, ValueError) as e:
-        raise ImportError(
-            "DefaultEmbeddingFunction is not available. "
-            "Install it with: pip install pyseekdb[default-embedding]"
-        ) from e
-
-
 class EmbeddingFunctionRegistry:
     """
     Registry for embedding function classes.
@@ -218,9 +192,11 @@ class EmbeddingFunctionRegistry:
         >>>
         >>> # Now you can use it when creating collections
         >>> import pyseekdb
-        >>> client = pyseekdb.Client(path="./db")
+        >>> client = pyseekdb.Client(host="localhost", port=2881, database="test")
         >>> ef = MyCustomEmbeddingFunction()
-        >>> collection = client.create_collection("my_collection", embedding_function=ef)
+        >>> collection = client.create_collection(
+        ...     "my_collection", schema=pyseekdb.Schema(embedding_function=ef)
+        ... )
         >>>
         >>> # When the collection is retrieved later, it will automatically restore
         >>> # the embedding function using the registry
@@ -232,43 +208,13 @@ class EmbeddingFunctionRegistry:
 
     @classmethod
     def _initialize(cls) -> None:
-        """Initialize the registry with built-in embedding functions."""
+        """Mark the registry as initialized.
+
+        Built-in embedding function implementations are no longer bundled with pyseekdb
+        (since 2.0); users must register their own via ``@register_embedding_function``.
+        """
         if cls._initialized:
             return
-
-        # Try to register DefaultEmbeddingFunction (may not be installed)
-        try:
-            from pyseekdb.utils.embedding_functions.default_embedding_function import (
-                DefaultEmbeddingFunction,
-            )
-
-            cls._registry["default"] = DefaultEmbeddingFunction
-        except ImportError:
-            pass
-
-        # Try to register optional embedding functions (each individually)
-        _optional_efs: list[tuple[str, str, str]] = [
-            ("sentence_transformer", "sentence_transformer_embedding_function", "SentenceTransformerEmbeddingFunction"),
-            ("openai", "openai_embedding_function", "OpenAIEmbeddingFunction"),
-            ("qwen", "qwen_embedding_function", "QwenEmbeddingFunction"),
-            ("mistral", "mistral_embedding_function", "MistralEmbeddingFunction"),
-            ("morph", "morph_embedding_function", "MorphEmbeddingFunction"),
-            ("siliconflow", "siliconflow_embedding_function", "SiliconflowEmbeddingFunction"),
-            ("tencent_hunyuan", "tencent_hunyuan_embedding_function", "TencentHunyuanEmbeddingFunction"),
-            ("text2vec", "text2vec_embedding_function", "Text2VecEmbeddingFunction"),
-            ("ollama", "ollama_embedding_function", "OllamaEmbeddingFunction"),
-            ("voyageai", "voyageai_embedding_function", "VoyageaiEmbeddingFunction"),
-            ("google_vertex", "google_vertex_embedding_function", "GoogleVertexEmbeddingFunction"),
-            ("cohere", "cohere_embedding_function", "CohereEmbeddingFunction"),
-            ("jina", "jina_embedding_function", "JinaEmbeddingFunction"),
-            ("amazon_bedrock", "amazon_bedrock_embedding_function", "AmazonBedrockEmbeddingFunction"),
-        ]
-        for name, module_name, class_name in _optional_efs:
-            try:
-                module = importlib.import_module(f"pyseekdb.utils.embedding_functions.{module_name}")
-                cls._registry[name] = getattr(module, class_name)
-            except ImportError:
-                pass
 
         cls._initialized = True
 
@@ -396,9 +342,11 @@ def register_embedding_function(embedding_function_class: type[T]) -> type[T]:
         >>> # The class is now automatically registered!
         >>> # You can use it immediately when creating collections
         >>> import pyseekdb
-        >>> client = pyseekdb.Client(path="./seekdb.db")
+        >>> client = pyseekdb.Client(host="localhost", port=2881, database="test")
         >>> ef = MyCustomEmbeddingFunction()
-        >>> collection = client.create_collection("my_collection", embedding_function=ef)
+        >>> collection = client.create_collection(
+        ...     "my_collection", schema=pyseekdb.Schema(embedding_function=ef)
+        ... )
     """
     EmbeddingFunctionRegistry.register(embedding_function_class)
     return embedding_function_class

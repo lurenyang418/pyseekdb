@@ -20,6 +20,7 @@ from pyseekdb import IVFConfiguration  # noqa: E402
 from pyseekdb.client.client_base import BaseClient  # noqa: E402
 from pyseekdb.client.collection import Collection  # noqa: E402
 from pyseekdb.client.configuration import HNSWConfiguration, IVFIndexType, VectorIndexConfig  # noqa: E402
+from pyseekdb.client.embedding_function import EmbeddingFunction  # noqa: E402
 from pyseekdb.client.namespace import Namespace  # noqa: E402
 from pyseekdb.client.validators import _validate_include, _validate_n_results, _validate_namespace_name  # noqa: E402
 
@@ -155,20 +156,43 @@ class TestIVFConfiguration:
 # ==================== VectorIndexConfig Tests ====================
 
 
+class _StubDenseEF(EmbeddingFunction):
+    """Tiny dense EF used to satisfy VectorIndexConfig validation in unit tests."""
+
+    def __call__(self, documents):  # type: ignore[override]
+        docs = documents if isinstance(documents, list) else [documents]
+        return [[0.0] * 4 for _ in docs]
+
+    def get_config(self) -> dict:
+        return {}
+
+    @staticmethod
+    def build_from_config(config):  # type: ignore[override]
+        return _StubDenseEF()
+
+    @staticmethod
+    def name() -> str:
+        return "stub"
+
+    @property
+    def dimension(self) -> int:
+        return 4
+
+
 class TestVectorIndexConfig:
     """TestVectorIndexConfig class."""
 
     def test_ivf_only(self):
         """Test ivf only."""
         ivf = IVFConfiguration(dimension=128)
-        config = VectorIndexConfig(ivf=ivf, embedding_function=None)
+        config = VectorIndexConfig(ivf=ivf, embedding_function=_StubDenseEF())
         assert config.ivf is ivf
         assert config.hnsw is None
 
     def test_hnsw_only(self):
         """Test hnsw only."""
         hnsw = HNSWConfiguration(dimension=128)
-        config = VectorIndexConfig(hnsw=hnsw, embedding_function=None)
+        config = VectorIndexConfig(hnsw=hnsw, embedding_function=_StubDenseEF())
         assert config.hnsw is hnsw
         assert config.ivf is None
 
@@ -1340,8 +1364,7 @@ class TestBrokenNsCollectionPurge:
         }
         c._get_ns_collection_meta = MagicMock(return_value=meta)
         c._purge_broken_ns_collection_if_incomplete = MagicMock(return_value=True)
-        c._get_collection_v1 = MagicMock(side_effect=ValueError("not v1"))
-        c._get_collection_v2 = MagicMock(side_effect=ValueError("Collection 'coll' does not exist"))
+        c._get_collection = MagicMock(side_effect=ValueError("Collection 'coll' does not exist"))
 
         with pytest.raises(ValueError, match="does not exist"):
             c.get_collection("coll")
@@ -1395,7 +1418,7 @@ class TestUseNamespaceValidation:
         from pyseekdb.client.schema import Schema
 
         hnsw = HNSWConfiguration(dimension=128)
-        schema = Schema(vector_index=VectorIndexConfig(hnsw=hnsw, embedding_function=None))
+        schema = Schema(vector_index=VectorIndexConfig(hnsw=hnsw, embedding_function=_StubDenseEF()))
         with pytest.raises(ValueError, match="does not support HNSW"):
             c._create_namespace_collection("test", schema)
 
@@ -1408,7 +1431,7 @@ class TestUseNamespaceValidation:
         schema = Schema(
             vector_index=VectorIndexConfig(
                 ivf=IVFConfiguration(dimension=3, centroids_fresh_mode="spfresh"),
-                embedding_function=None,
+                embedding_function=_StubDenseEF(),
             ),
             sparse_vector_index=SparseVectorIndexConfig(embedding_function=MagicMock()),
         )
@@ -1424,7 +1447,8 @@ class TestUseNamespaceValidation:
 
         schema = Schema(
             vector_index=VectorIndexConfig(
-                ivf=IVFConfiguration(dimension=3, centroids_fresh_mode="spfresh"), embedding_function=None
+                ivf=IVFConfiguration(dimension=3, centroids_fresh_mode="spfresh"),
+                embedding_function=_StubDenseEF(),
             )
         )
         with pytest.raises(ValueError, match="only supported on LakeBase"):
@@ -1463,12 +1487,33 @@ class TestUseNamespaceValidation:
         c._create_ns_collection_meta = MagicMock(return_value={"collection_id": "abc123"})
         c._ensure_namespace_catalogs = MagicMock()
         from pyseekdb.client.configuration import VectorIndexConfig
+        from pyseekdb.client.embedding_function import EmbeddingFunction
         from pyseekdb.client.schema import Schema
+
+        class _StubEF(EmbeddingFunction):
+            def __call__(self, documents):
+                docs = documents if isinstance(documents, list) else [documents]
+                return [[0.0] * 3 for _ in docs]
+
+            def get_config(self):
+                return {}
+
+            @staticmethod
+            def build_from_config(c):
+                return _StubEF()
+
+            @staticmethod
+            def name():
+                return "stub"
+
+            @property
+            def dimension(self):
+                return 3
 
         schema = Schema(
             vector_index=VectorIndexConfig(
                 ivf=IVFConfiguration(dimension=3, distance="l2"),
-                embedding_function=None,
+                embedding_function=_StubEF(),
             )
         )
         c._create_namespace_collection("test", schema)

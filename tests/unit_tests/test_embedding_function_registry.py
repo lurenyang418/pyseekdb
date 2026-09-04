@@ -1,5 +1,9 @@
 """
 Unit tests for EmbeddingFunctionRegistry and register_embedding_function decorator.
+
+Since pyseekdb 2.0, no embedding function implementations are bundled. The registry starts
+empty and users register their own implementations via ``@register_embedding_function`` or
+``EmbeddingFunctionRegistry.register(...)``.
 """
 
 from typing import Any
@@ -13,9 +17,6 @@ from pyseekdb.client.embedding_function import (
     Embeddings,
     register_embedding_function,
 )
-from pyseekdb.utils.embedding_functions.default_embedding_function import (
-    DefaultEmbeddingFunction,
-)
 
 
 class TestEmbeddingFunctionRegistry:
@@ -27,14 +28,11 @@ class TestEmbeddingFunctionRegistry:
         EmbeddingFunctionRegistry._registry.clear()
         EmbeddingFunctionRegistry._initialized = False
 
-    def test_initialization_registers_default(self):
-        """Test that initialization registers DefaultEmbeddingFunction"""
-        # Force initialization
+    def test_initialization_registers_no_builtins(self):
+        """After pyseekdb 2.0 no built-in implementations are auto-registered."""
         EmbeddingFunctionRegistry._initialize()
-
-        assert "default" in EmbeddingFunctionRegistry._registry
-        assert EmbeddingFunctionRegistry._registry["default"] == DefaultEmbeddingFunction
         assert EmbeddingFunctionRegistry._initialized is True
+        assert EmbeddingFunctionRegistry.list_registered() == []
 
     def test_initialization_idempotent(self):
         """Test that initialization is idempotent"""
@@ -47,13 +45,6 @@ class TestEmbeddingFunctionRegistry:
 
         # Should be the same
         assert first_registry == second_registry
-
-    def test_get_class_returns_default(self):
-        """Test that get_class returns DefaultEmbeddingFunction for 'default'"""
-        cls = EmbeddingFunctionRegistry.get_class("default")
-
-        assert cls is not None
-        assert cls == DefaultEmbeddingFunction
 
     def test_get_class_returns_none_for_unregistered(self):
         """Test that get_class returns None for unregistered names"""
@@ -211,7 +202,7 @@ class TestEmbeddingFunctionRegistry:
                 return {}
 
             @staticmethod
-            def build_from_config(_config: dict[str, Any]) -> "TestEmbeddingFunction1":
+            def build_from_config(config: dict[str, Any]) -> "TestEmbeddingFunction1":
                 return TestEmbeddingFunction1()
 
         class TestEmbeddingFunction2(EmbeddingFunction[Documents]):
@@ -226,7 +217,7 @@ class TestEmbeddingFunctionRegistry:
                 return {}
 
             @staticmethod
-            def build_from_config(_config: dict[str, Any]) -> "TestEmbeddingFunction2":
+            def build_from_config(config: dict[str, Any]) -> "TestEmbeddingFunction2":
                 return TestEmbeddingFunction2()
 
         EmbeddingFunctionRegistry.register(TestEmbeddingFunction1)
@@ -235,8 +226,7 @@ class TestEmbeddingFunctionRegistry:
         registered = EmbeddingFunctionRegistry.list_registered()
         assert "test1" in registered
         assert "test2" in registered
-        assert "default" in registered  # Built-in
-        assert len(registered) >= 3
+        assert len(registered) == 2
 
 
 class TestRegisterEmbeddingFunctionDecorator:
@@ -367,10 +357,9 @@ class TestRegisterEmbeddingFunctionDecorator:
         # Registry should be initialized
         assert EmbeddingFunctionRegistry._initialized is True
 
-        # Both default and custom should be registered
+        # Only the custom one is registered (no built-ins since 2.0)
         registered = EmbeddingFunctionRegistry.list_registered()
-        assert "default" in registered
-        assert "custom_embedding" in registered
+        assert registered == ["custom_embedding"]
 
     def test_multiple_decorated_classes(self):
         """Test that multiple decorated classes can coexist"""

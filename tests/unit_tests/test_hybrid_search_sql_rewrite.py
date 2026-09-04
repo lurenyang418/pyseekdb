@@ -13,7 +13,7 @@ from pyseekdb.client.client_base import _unquote_json_extract_expressions
             "WHERE (JSON_EXTRACT(metadata, '$.category')) = 'AI' "
             "ORDER BY `_score` DESC, `__pk_increment`"
         ),
-        ("SELECT * FROM `c$v1$test` WHERE JSON_EXTRACT(metadata, '$.score') >= 90 ORDER BY `_distance`"),
+        ("SELECT * FROM `c$v2$test` WHERE JSON_EXTRACT(metadata, '$.score') >= 90 ORDER BY `_distance`"),
     ],
 )
 def test_unquoted_json_extract_does_not_remove_adjacent_identifier_quotes(query_sql: str) -> None:

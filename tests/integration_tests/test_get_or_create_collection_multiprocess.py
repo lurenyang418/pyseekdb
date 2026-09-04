@@ -4,21 +4,17 @@ Integration tests for concurrent collection operations across client modes.
 Covers multiprocess + multithread workloads. Each thread must use its own
 ``pyseekdb.Client`` instance because ``Client`` is not thread-safe.
 
-Tests are parameterized with ``[embedded]``, ``[server]``, and ``[oceanbase]``
-so each runs in the matching integration-test CI job, not in the unit-test
-integration step.
+Tests are parameterized with ``[server]`` and ``[oceanbase]`` so each runs in
+the matching integration-test CI job, not in the unit-test integration step.
 """
 
 from __future__ import annotations
 
 import contextlib
 import importlib
-import importlib.metadata
 import multiprocessing as mp
 import os
-import shutil
 import sys
-import tempfile
 import time
 import uuid
 from collections.abc import Callable
@@ -28,7 +24,6 @@ from queue import Empty
 from typing import Any
 
 import pytest
-from packaging.version import Version
 
 repo_root = Path(__file__).resolve().parents[2]
 src_root = repo_root / "src"
@@ -41,7 +36,6 @@ ITEMS_PER_THREAD = 5
 WORKER_TIMEOUT_SECONDS = 60
 # OB CE mini in CI defaults to 10s; bulk HNSW insert/refresh can exceed that under load.
 OB_QUERY_TIMEOUT_MICROSECONDS = 60_000_000
-MIN_PYLIBSEEKDB_VERSION = Version("1.3.0.post1")
 _MP_CONTEXT = mp.get_context("spawn")
 
 SERVER_HOST = os.environ.get("SERVER_HOST", "127.0.0.1")
@@ -55,12 +49,7 @@ OB_TENANT = os.environ.get("OB_TENANT", "mysql")
 OB_USER = os.environ.get("OB_USER", "root")
 OB_PASSWORD = os.environ.get("OB_PASSWORD", "")
 
-# Keep database files off system temp directories, which may be tmpfs and reject O_DIRECT.
-SEEKDB_TEST_DATA_ROOT = Path(os.environ.get("SEEKDB_TEST_DATA_ROOT", str(repo_root / ".seekdb-test-data")))
-
-pytestmark = pytest.mark.parametrize(
-    "_mode", ["embedded", "server", "oceanbase"], ids=["embedded", "server", "oceanbase"]
-)
+pytestmark = pytest.mark.parametrize("_mode", ["server", "oceanbase"], ids=["server", "oceanbase"])
 
 
 def _purge_pyseekdb_modules() -> None:
@@ -95,8 +84,6 @@ def _make_client(client_config: dict[str, Any]):
     """Make client."""
     pyseekdb = _import_pyseekdb()
     mode = client_config["mode"]
-    if mode == "embedded":
-        return pyseekdb.Client(path=client_config["path"], database=client_config["database"])
     if mode in ("server", "oceanbase"):
         client = pyseekdb.Client(
             host=client_config["host"],
@@ -116,8 +103,6 @@ def _make_admin_client(client_config: dict[str, Any]):
     """Make admin client."""
     pyseekdb = _import_pyseekdb()
     mode = client_config["mode"]
-    if mode == "embedded":
-        return pyseekdb.AdminClient(path=client_config["path"])
     if mode in ("server", "oceanbase"):
         admin = pyseekdb.AdminClient(
             host=client_config["host"],
@@ -142,24 +127,6 @@ def _refresh_collection(client_config: dict[str, Any], collection_name: str) -> 
     client = _make_client(client_config)
     collection = _get_collection(client, collection_name)
     collection.refresh_index()
-
-
-def _require_embedded_pylibseekdb() -> None:
-    """Require embedded pylibseekdb."""
-    try:
-        import pylibseekdb  # noqa: F401
-    except ImportError:
-        pytest.skip("seekdb embedded package is not installed")
-
-    try:
-        installed_version = Version(importlib.metadata.version("pylibseekdb"))
-    except importlib.metadata.PackageNotFoundError:
-        pytest.skip("pylibseekdb is not installed")
-
-    if installed_version < MIN_PYLIBSEEKDB_VERSION:
-        pytest.skip(
-            f"embedded multiprocess tests require pylibseekdb >= {MIN_PYLIBSEEKDB_VERSION}, got {installed_version}"
-        )
 
 
 def _run_processes(
@@ -217,8 +184,7 @@ def _get_or_create_worker(
         client = _make_client(client_config)
         collection = client.get_or_create_collection(
             collection_name,
-            configuration=pyseekdb.HNSWConfiguration(dimension=EMBED_DIM, distance="cosine"),
-            embedding_function=None,
+            schema=pyseekdb.Schema(vector_index=pyseekdb.HNSWConfiguration(dimension=EMBED_DIM, distance="cosine")),
         )
         output.put({"ok": True, "name": collection.name})
     except Exception as exc:
@@ -480,17 +446,11 @@ def _mixed_crud_worker(
         output.put({"ok": False, "process_id": process_id, "error_type": type(exc).__name__, "error": str(exc)})
 
 
-def _build_client_config(mode: str) -> tuple[dict[str, Any], Path | None, Any]:
+def _build_client_config(mode: str) -> tuple[dict[str, Any], Any]:
     """Build client config."""
     database = f"test_mp_{uuid.uuid4().hex[:8]}"
-    temp_db_path: Path | None = None
 
-    if mode == "embedded":
-        _require_embedded_pylibseekdb()
-        SEEKDB_TEST_DATA_ROOT.mkdir(parents=True, exist_ok=True)
-        temp_db_path = Path(tempfile.mkdtemp(prefix="seekdb-mp-", dir=SEEKDB_TEST_DATA_ROOT))
-        client_config = {"mode": "embedded", "path": str(temp_db_path), "database": database}
-    elif mode == "server":
+    if mode == "server":
         client_config = {
             "mode": "server",
             "host": SERVER_HOST,
@@ -515,19 +475,16 @@ def _build_client_config(mode: str) -> tuple[dict[str, Any], Path | None, Any]:
 
     admin = _make_admin_client(client_config)
     admin.create_database(database)
-    return client_config, temp_db_path, admin
+    return client_config, admin
 
 
 @pytest.fixture
 def multiprocess_db(_mode):
     """Multiprocess db."""
-    client_config, temp_db_path, admin = _build_client_config(_mode)
+    client_config, admin = _build_client_config(_mode)
     yield client_config
     with contextlib.suppress(Exception):
         admin.close()
-    if temp_db_path is not None:
-        with contextlib.suppress(Exception):
-            shutil.rmtree(temp_db_path, ignore_errors=True)
 
 
 @pytest.fixture
@@ -540,8 +497,7 @@ def crud_collection(multiprocess_db):
     client = _make_client(client_config)
     client.create_collection(
         name=collection_name,
-        configuration=pyseekdb.HNSWConfiguration(dimension=EMBED_DIM, distance="cosine"),
-        embedding_function=None,
+        schema=pyseekdb.Schema(vector_index=pyseekdb.HNSWConfiguration(dimension=EMBED_DIM, distance="cosine")),
     )
 
     yield client_config, collection_name

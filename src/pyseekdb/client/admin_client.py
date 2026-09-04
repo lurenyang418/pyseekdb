@@ -9,18 +9,15 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 from .database import Database
+from .schema import Schema
 from .types import _NOT_PROVIDED
 
 if TYPE_CHECKING:
     from .client_base import (
         BaseClient,
-        ConfigurationParam,
-        EmbeddingFunctionParam,
     )
     from .collection import Collection
 
-SchemaParam = Any  # Type hint placeholder
-ConfigurationParam = Any  # Type hint placeholder
 EmbeddingFunctionParam = Any  # Type hint placeholder
 
 DEFAULT_TENANT = "test"
@@ -31,6 +28,11 @@ class AdminAPI(ABC):
     Abstract admin API interface for database management.
     Defines the contract for database operations.
     """
+
+    @abstractmethod
+    def ping(self) -> bool:
+        """Check whether the server responds to a lightweight health check."""
+        pass
 
     @abstractmethod
     def create_database(self, name: str, tenant: str = DEFAULT_TENANT) -> None:
@@ -115,7 +117,7 @@ class AdminAPI(ABC):
 class _AdminClientProxy(AdminAPI):
     """
     A lightweight facade that delegates all operations to the underlying ServerAPI (BaseClient).
-    The actual logic is in the specific client implementations (Embedded/Server/OceanBase).
+    The actual logic is in the specific client implementations (seekdb Server / OceanBase Server).
 
     Note: This is an internal class. Users should use the AdminClient() factory function.
     """
@@ -155,6 +157,10 @@ class _AdminClientProxy(AdminAPI):
     def fork_database(self, source_name: str, destination_name: str, tenant: str = DEFAULT_TENANT) -> Database:
         """Proxy to server implementation"""
         return self._server.fork_database(source_name=source_name, destination_name=destination_name, tenant=tenant)
+
+    def ping(self) -> bool:
+        """Check whether the underlying server responds."""
+        return self._server.ping()
 
     def close(self) -> None:
         """Close the underlying client and release its resources."""
@@ -196,20 +202,14 @@ class _ClientProxy:
     def create_collection(
         self,
         name: str,
-        schema: SchemaParam = None,
-        configuration: ConfigurationParam = _NOT_PROVIDED,
-        embedding_function: EmbeddingFunctionParam = _NOT_PROVIDED,
+        schema: Schema | None = None,
         use_namespace: bool = False,
-        **kwargs,
     ) -> "Collection":
         """Proxy to server implementation - collection operations only"""
         return self._server.create_collection(
             name=name,
             schema=schema,
-            configuration=configuration,
-            embedding_function=embedding_function,
             use_namespace=use_namespace,
-            **kwargs,
         )
 
     def get_collection(self, name: str, embedding_function: EmbeddingFunctionParam = _NOT_PROVIDED) -> "Collection":
@@ -231,21 +231,19 @@ class _ClientProxy:
     def get_or_create_collection(
         self,
         name: str,
-        schema: SchemaParam = None,
-        configuration: ConfigurationParam = _NOT_PROVIDED,
-        embedding_function: EmbeddingFunctionParam = _NOT_PROVIDED,
+        schema: Schema | None = None,
         use_namespace: bool = False,
-        **kwargs,
     ) -> "Collection":
         """Proxy to server implementation - collection operations only"""
         return self._server.get_or_create_collection(
             name=name,
             schema=schema,
-            configuration=configuration,
-            embedding_function=embedding_function,
             use_namespace=use_namespace,
-            **kwargs,
         )
+
+    def ping(self) -> bool:
+        """Check whether the underlying server responds."""
+        return self._server.ping()
 
     def count_collection(self) -> int:
         """Proxy to server implementation - collection operations only"""

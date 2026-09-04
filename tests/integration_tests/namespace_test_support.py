@@ -65,13 +65,12 @@ def probe_oceanbase_connection() -> tuple[bool, str]:
             user=env["user"],
             password=env["password"],
         )
-        rows = client._server._execute("SELECT 1 AS ok")
-        if rows:
+        if client.ping():
             _OB_CONNECTION_AVAILABLE = (True, "")
         else:
             _OB_CONNECTION_AVAILABLE = (
                 False,
-                f"OceanBase unavailable for namespace validation tests ({env['host']}:{env['port']}): empty result from SELECT 1",
+                f"OceanBase unavailable for namespace validation tests ({env['host']}:{env['port']}): health check failed",
             )
     except Exception as exc:
         _OB_CONNECTION_AVAILABLE = (
@@ -86,7 +85,7 @@ def probe_oceanbase_connection() -> tuple[bool, str]:
 
 
 def infer_integration_test_mode(item) -> str | None:
-    """Infer embedded/server/oceanbase mode from parametrized fixtures."""
+    """Infer server/oceanbase mode from parametrized fixtures."""
     callspec = getattr(item, "callspec", None)
     if callspec is not None:
         for key in ("db_client", "admin_client", "_mode"):
@@ -96,8 +95,6 @@ def infer_integration_test_mode(item) -> str | None:
     fixturenames = getattr(item, "fixturenames", ())
     if "oceanbase_client" in fixturenames or "oceanbase_admin_client" in fixturenames:
         return "oceanbase"
-    if "embedded_client" in fixturenames or "embedded_admin_client" in fixturenames:
-        return "embedded"
     if "server_client" in fixturenames or "server_admin_client" in fixturenames:
         return "server"
 
@@ -165,8 +162,8 @@ def maybe_skip_namespace_integration_test(item) -> None:
         return
 
     mode = infer_integration_test_mode(item)
-    if mode in ("embedded", "server"):
-        pytest.skip("namespace collections require OceanBase (skip embedded/server integration modes)")
+    if mode == "server":
+        pytest.skip("namespace collections require OceanBase (skip server integration mode)")
 
     if item.name in _VERSION_CONSTANT_ONLY_TESTS:
         return
