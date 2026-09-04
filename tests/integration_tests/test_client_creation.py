@@ -10,6 +10,7 @@ import uuid
 
 import pytest
 
+import pyseekdb
 from pyseekdb import FulltextIndexConfig, HNSWConfiguration, Schema, VectorIndexConfig
 
 
@@ -29,7 +30,7 @@ class TestClientCreation:
         """
         # Verify client is properly initialized
         assert db_client is not None
-        assert hasattr(db_client, "_server")
+        assert isinstance(db_client, pyseekdb.Client)
         # Note: Client uses lazy loading, connection happens on first use
 
         # Test 1: create_collection - create a new collection

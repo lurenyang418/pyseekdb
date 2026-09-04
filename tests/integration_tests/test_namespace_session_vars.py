@@ -36,7 +36,7 @@ class TestNamespaceSessionVars:
 
     def _query_session_vars(self, client):
         """Query session vars."""
-        rows = client._server._execute("SELECT @collection_id AS cid, @namespace_id AS nsid, @ltable_id AS ltid")
+        rows = client._execute("SELECT @collection_id AS cid, @namespace_id AS nsid, @ltable_id AS ltid")
         row = rows[0]
         if isinstance(row, (list, tuple)):
             return {"cid": row[0], "nsid": row[1], "ltid": row[2]}

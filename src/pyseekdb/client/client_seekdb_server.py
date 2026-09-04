@@ -8,7 +8,6 @@ import logging
 import pymysql
 from pymysql.cursors import DictCursor
 
-from .admin_client import DEFAULT_TENANT
 from .client_base import BaseClient
 from .kernel_errors import namespace_kernel_error_guard
 
@@ -126,14 +125,6 @@ class RemoteServerClient(BaseClient):
 
     # _collection_count is inherited from BaseClient - no override needed
 
-    def _database_tenant(self, tenant: str) -> str | None:
-        """Return the tenant associated with the active database."""
-        if tenant != self.tenant and tenant != DEFAULT_TENANT:
-            logger.warning(
-                f"Specified tenant '{tenant}' differs from client tenant '{self.tenant}', using client tenant"
-            )
-        return self.tenant
-
     @namespace_kernel_error_guard
     def _namespace_prewarm(
         self,
@@ -157,4 +148,4 @@ class RemoteServerClient(BaseClient):
     def __repr__(self):
         """Return the developer-readable representation."""
         status = "connected" if self.is_connected() else "disconnected"
-        return f"<RemoteServerClient {self.full_user}@{self.host}:{self.port}/{self.database} status={status}>"
+        return f"<{type(self).__name__} {self.full_user}@{self.host}:{self.port}/{self.database} status={status}>"

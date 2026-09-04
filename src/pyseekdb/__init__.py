@@ -49,26 +49,18 @@ Remote server mode (OceanBase Server) - Collection management:
         schema=Schema(vector_index=VectorIndexConfig(hnsw=HNSWConfiguration(dimension=384))),
     )
 
-Admin client - Database management:
-
-.. code-block:: python
-
-    import pyseekdb
-    admin = pyseekdb.AdminClient(host="localhost", port=2881, user="root", password="pass")
-    admin.create_database("new_db")
-    databases = admin.list_databases()
+Database provisioning is intentionally outside the SDK. Use your deployment or
+DBA tooling to create the database before constructing ``Client``.
 """
 
 import importlib.metadata
 
 from .client import (
-    AdminAPI,
-    AdminClient,
-    BaseClient,
-    BaseConnection,
+    AsyncClient,
+    AsyncCollection,
     BengProperties,
     Client,
-    Database,
+    Collection,
     EmbeddingFunction,
     FulltextIndexConfig,
     HNSWConfiguration,
@@ -78,9 +70,10 @@ from .client import (
     IVFIndexLib,
     IVFIndexType,
     K,
+    Namespace,
     Ngram2Properties,
     NgramProperties,
-    RemoteServerClient,
+    QueryHint,
     Schema,
     SpaceProperties,
     SparseEmbeddingFunction,
@@ -92,8 +85,6 @@ from .client import (
     register_embedding_function,
     register_sparse_embedding_function,
 )
-from .client.collection import Collection
-from .client.namespace import Namespace
 
 try:
     __version__ = importlib.metadata.version("pyseekdb")
@@ -103,14 +94,11 @@ except importlib.metadata.PackageNotFoundError:
 __author__ = "OceanBase <open_oceanbase@oceanbase.com>"
 
 __all__ = [
-    "AdminAPI",
-    "AdminClient",
-    "BaseClient",
-    "BaseConnection",
+    "AsyncClient",
+    "AsyncCollection",
     "BengProperties",
     "Client",
     "Collection",
-    "Database",
     "EmbeddingFunction",
     "FulltextIndexConfig",
     "HNSWConfiguration",
@@ -123,7 +111,7 @@ __all__ = [
     "Namespace",
     "Ngram2Properties",
     "NgramProperties",
-    "RemoteServerClient",
+    "QueryHint",
     "Schema",
     "SpaceProperties",
     "SparseEmbeddingFunction",

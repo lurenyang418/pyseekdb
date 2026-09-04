@@ -106,7 +106,7 @@ def test_multi_client_has_does_not_error_during_drop(oceanbase_client):
         collection.create_namespace(ns_name)
         dropper = clients[0].get_collection(collection.name)
         checker = clients[1].get_collection(collection.name)
-        real_execute = clients[0]._server._execute
+        real_execute = clients[0]._execute
 
         def _slow_drop_execute(sql, *args, **kwargs):
             """Slow drop execute."""
@@ -118,7 +118,7 @@ def test_multi_client_has_does_not_error_during_drop(oceanbase_client):
         def _drop_worker() -> None:
             """Drop worker."""
             try:
-                with patch.object(clients[0]._server, "_execute", side_effect=_slow_drop_execute):
+                with patch.object(clients[0], "_execute", side_effect=_slow_drop_execute):
                     dropper.delete_namespace(ns_name)
             except Exception as exc:
                 errors.append(exc)

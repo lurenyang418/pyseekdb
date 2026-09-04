@@ -47,11 +47,10 @@ class TestDetectDbTypeAndVersion:
         """Test: detect seekdb Server type and version"""
         # Verify client type
         assert db_client is not None
-        assert hasattr(db_client, "_server")
-        assert isinstance(db_client._server, pyseekdb.RemoteServerClient)
+        assert isinstance(db_client, pyseekdb.Client)
 
         # Test detect_db_type_and_version
-        db_type, version = db_client._server.detect_db_type_and_version()
+        db_type, version = db_client.detect_db_type_and_version()
 
         # Verify results
         assert db_type == "seekdb"
@@ -71,11 +70,10 @@ class TestDetectDbTypeAndVersion:
         """Test: detect OceanBase Server type and version"""
         # Verify client type
         assert db_client is not None
-        assert hasattr(db_client, "_server")
-        assert isinstance(db_client._server, pyseekdb.RemoteServerClient)
+        assert isinstance(db_client, pyseekdb.Client)
 
         # Test detect_db_type_and_version
-        db_type, version = db_client._server.detect_db_type_and_version()
+        db_type, version = db_client.detect_db_type_and_version()
 
         # Verify results
         assert db_type == "oceanbase"
@@ -96,10 +94,10 @@ class TestDetectDbTypeAndVersion:
         # We test that the method works correctly
 
         # Call detect_db_type_and_version
-        db_type, version = db_client._server.detect_db_type_and_version()
+        db_type, version = db_client.detect_db_type_and_version()
 
         # Verify connection is established
-        assert db_client._server.is_connected()
+        assert db_client.is_connected()
 
         # Verify results
         assert db_type in ["seekdb", "oceanbase"]
@@ -112,7 +110,7 @@ class TestDetectDbTypeAndVersion:
     def test_return_format(self, db_client):
         """Test: verify detect_db_type_and_version returns correct tuple format"""
         # Test detect_db_type_and_version
-        result = db_client._server.detect_db_type_and_version()
+        result = db_client.detect_db_type_and_version()
 
         # Verify return type is tuple
         assert isinstance(result, tuple)

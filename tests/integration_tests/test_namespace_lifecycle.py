@@ -189,7 +189,7 @@ class TestNamespaceLifecycle:
         from pyseekdb.client.meta_info import NamespaceCollectionNames
 
         client = oceanbase_client
-        srv = client._server
+        srv = client
         name = f"test_ns_resume_{int(time.time() * 1000)}"
         schema = Schema(
             vector_index=VectorIndexConfig(
@@ -227,7 +227,7 @@ class TestNamespaceLifecycle:
         from pyseekdb.client.meta_info import NamespaceCollectionNames
 
         client = oceanbase_client
-        srv = client._server
+        srv = client
         name = f"test_ns_broken_get_{int(time.time() * 1000)}"
         schema = Schema(
             vector_index=VectorIndexConfig(
@@ -292,8 +292,8 @@ class TestNamespaceLifecycle:
             try:
                 db_client.delete_collection(name=name)
             except (ValueError, RuntimeError):
-                db_client._server._execute(f"DROP TABLE IF EXISTS `{name}`")
-                db_client._server._execute(f"DELETE FROM `sdk_collections` WHERE COLLECTION_NAME = '{name}'")
+                db_client._execute(f"DROP TABLE IF EXISTS `{name}`")
+                db_client._execute(f"DELETE FROM `sdk_collections` WHERE COLLECTION_NAME = '{name}'")
 
     def test_create_namespace_collection_with_hnsw_raises(self, db_client):
         """Test create namespace collection with hnsw raises."""
@@ -318,7 +318,7 @@ class TestNamespaceLifecycle:
 
         client = oceanbase_client
 
-        with patch.object(type(client._server), "_is_shared_storage_mode", return_value=True):
+        with patch.object(type(client), "_is_shared_storage_mode", return_value=True):
             name = f"test_ns_ss_{int(time.time() * 1000)}"
             schema = Schema(
                 vector_index=VectorIndexConfig(
@@ -337,15 +337,13 @@ class TestNamespaceLifecycle:
             collection_id = collection.id
 
             # Verify settings has storage_mode=ss
-            rows = client._server._execute(
-                f"SELECT settings FROM sdk_collections WHERE collection_id = '{collection_id}'"
-            )
+            rows = client._execute(f"SELECT settings FROM sdk_collections WHERE collection_id = '{collection_id}'")
             settings = json.loads(rows[0]["settings"])
             assert settings["storage_mode"] == "ss", f"Expected ss, got {settings.get('storage_mode')}"
 
             # Verify hot_table was actually created
             hot_table = NamespaceCollectionNames.hot_table_name(collection_id)
-            rows = client._server._execute(f"DESCRIBE `{hot_table}`")
+            rows = client._execute(f"DESCRIBE `{hot_table}`")
             assert rows is not None and len(rows) > 0, "hot_table should exist in SS mode"
 
             col_names = {r["Field"] for r in rows}
@@ -375,7 +373,7 @@ class TestNamespaceLifecycle:
             assert oceanbase_client.get_collection(name).partition_count == 4
 
             data_table = NamespaceCollectionNames.data_table_name(collection.id)
-            rows = oceanbase_client._server._execute(f"SHOW CREATE TABLE `{data_table}`")
+            rows = oceanbase_client._execute(f"SHOW CREATE TABLE `{data_table}`")
             create_sql = rows[0].get("Create Table", "") if rows else ""
             partitions = re.findall(r"partition `p\d+`", create_sql)
             assert len(partitions) == 4, f"Expected 4 partitions, found {len(partitions)}: {create_sql[-300:]}"

@@ -131,9 +131,9 @@ class TestNamespaceMinVersionConstraint:
 
     def test_connected_lakebase_meets_min_version(self, oceanbase_client):
         """The kernel under test must be LakeBase >= 4.6.1, and creation succeeds."""
-        db_type, version = oceanbase_client._server.detect_db_type_and_version()
+        db_type, version = oceanbase_client.detect_db_type_and_version()
         assert db_type.lower() == "oceanbase"
-        assert oceanbase_client._server._is_lakebase_cluster() is True
+        assert oceanbase_client._is_lakebase_cluster() is True
         assert version >= NAMESPACE_MIN_LAKEBASE_VERSION, (
             f"connected LakeBase version {version} < required {NAMESPACE_MIN_LAKEBASE_VERSION}"
         )
@@ -152,7 +152,7 @@ class TestNamespaceMinVersionConstraint:
 
     def test_standard_oceanbase_rejected(self, oceanbase_client, monkeypatch):
         """Standard OceanBase (without Database AI) must be rejected even when version is new enough."""
-        server = oceanbase_client._server
+        server = oceanbase_client
         monkeypatch.setattr(type(server), "_is_lakebase_cluster", lambda self: False)
         name = _unique_name("_not_lakebase")
         with pytest.raises(ValueError, match="only supported on LakeBase"):
@@ -161,7 +161,7 @@ class TestNamespaceMinVersionConstraint:
 
     def test_old_lakebase_version_rejected(self, oceanbase_client, monkeypatch):
         """Simulate an older LakeBase kernel: namespace creation must fail with a clear error."""
-        server = oceanbase_client._server
+        server = oceanbase_client
         monkeypatch.setattr(type(server), "_is_lakebase_cluster", lambda self: True)
         monkeypatch.setattr(
             type(server),

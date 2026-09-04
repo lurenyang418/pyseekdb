@@ -88,14 +88,14 @@ def infer_integration_test_mode(item) -> str | None:
     """Infer server/oceanbase mode from parametrized fixtures."""
     callspec = getattr(item, "callspec", None)
     if callspec is not None:
-        for key in ("db_client", "admin_client", "_mode"):
+        for key in ("db_client", "_mode"):
             if key in callspec.params:
                 return str(callspec.params[key])
 
     fixturenames = getattr(item, "fixturenames", ())
-    if "oceanbase_client" in fixturenames or "oceanbase_admin_client" in fixturenames:
+    if "oceanbase_client" in fixturenames:
         return "oceanbase"
-    if "server_client" in fixturenames or "server_admin_client" in fixturenames:
+    if "server_client" in fixturenames:
         return "server"
 
     # Files like test_logic_table_monitoring_p1.py build OB clients inline.
@@ -123,8 +123,8 @@ def probe_oceanbase_namespace_support() -> tuple[bool, str]:
             user=env["user"],
             password=env["password"],
         )
-        db_type, version = client._server.detect_db_type_and_version()
-        is_lakebase = client._server._is_lakebase_cluster()
+        db_type, version = client.detect_db_type_and_version()
+        is_lakebase = client._is_lakebase_cluster()
     except Exception as exc:
         _OB_NAMESPACE_SUPPORT = (
             False,

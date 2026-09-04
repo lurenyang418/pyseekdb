@@ -6,8 +6,8 @@ from typing import Any
 
 import pytest
 
-from pyseekdb.client.client_base import _get_sparse_vector_index_sql
 from pyseekdb.client.configuration import SparseVectorIndexConfig
+from pyseekdb.client.query_builder import build_sparse_vector_index_sql as _get_sparse_vector_index_sql
 from pyseekdb.client.sparse_embedding_function import (
     Documents,
     SparseEmbeddingFunction,

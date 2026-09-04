@@ -26,7 +26,7 @@ class TestFulltextIndexConfig:
     def _assert_parser(self, client, collection, parser: str, params: dict | None = None) -> None:
         table_name = self._table_name(collection)
         try:
-            result = client._server._execute(f"SHOW CREATE TABLE `{table_name}`")
+            result = client._execute(f"SHOW CREATE TABLE `{table_name}`")
             assert result
             row = result[0]
             create_stmt = (

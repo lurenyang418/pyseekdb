@@ -66,7 +66,7 @@ OB_SYS_PASSWORD = os.environ.get("OB_SYS_PASSWORD", "")
 
 def _exec(client, sql):
     """Exec."""
-    return client._server._execute(sql)
+    return client._execute(sql)
 
 
 def _resolve_table_id(client, table_name):
@@ -216,7 +216,7 @@ class _BaseLobPrewarm:
         kv_table = NamespaceCollectionNames.kv_data_table_name(collection_id)
         # _execute() takes no params, so use the raw DBAPI connection to bind the
         # binary blob safely (avoids building multi-MB hex-literal SQL strings).
-        raw = client._server.get_raw_connection()
+        raw = client.get_raw_connection()
         with raw.cursor() as cur:
             for i in range(LOB_PROBE_ROWS):
                 cur.execute(

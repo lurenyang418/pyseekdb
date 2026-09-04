@@ -15,7 +15,6 @@ src_root = project_root / "src"
 sys.path.insert(0, str(src_root))
 
 from pyseekdb import IVFConfiguration  # noqa: E402
-from pyseekdb.client.admin_client import _AdminClientProxy, _ClientProxy  # noqa: E402
 from pyseekdb.client.client_base import BaseClient  # noqa: E402
 from pyseekdb.client.configuration import (  # noqa: E402
     HNSWConfiguration,
@@ -127,35 +126,3 @@ class TestNamespaceGetOrCreatePublicAPI:
 
         assert result is existing
         client.get_collection.assert_called_once_with("items", embedding_function=_NOT_PROVIDED)
-
-
-@pytest.mark.parametrize("proxy_type", [_ClientProxy, _AdminClientProxy])
-def test_public_proxy_close_delegates_to_server(proxy_type) -> None:
-    """Both ``Client`` and ``AdminClient`` proxies forward ``close()`` to their underlying server."""
-
-    class _Server:
-        def __init__(self) -> None:
-            self.close_count = 0
-
-        def close(self) -> None:
-            self.close_count += 1
-
-    server = _Server()
-    proxy = proxy_type(server)
-
-    proxy.close()
-
-    assert server.close_count == 1
-
-
-@pytest.mark.parametrize("proxy_type", [_ClientProxy, _AdminClientProxy])
-def test_public_proxy_ping_delegates_to_server(proxy_type) -> None:
-    """Both public proxies forward ``ping()`` to their underlying server."""
-
-    class _Server:
-        def ping(self) -> bool:
-            return True
-
-    proxy = proxy_type(_Server())
-
-    assert proxy.ping()

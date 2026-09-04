@@ -17,7 +17,7 @@ Key features:
 - **Hybrid Search**: Combine vector and full-text search
 - **Pluggable Embedding Functions**: Use your own `EmbeddingFunction` implementation
 - **Collection Management**: Easy collection (table) creation and management
-- **Database Management**: Admin operations for database management
+- **Database Branching**: Fork an existing seekdb database into an isolated branch
 
 ## Documentation
 
@@ -33,6 +33,9 @@ Key features:
 pip install -U pyseekdb
 # or with uv
 uv add pyseekdb
+
+# Optional asynchronous client
+pip install -U "pyseekdb[async]"
 ```
 
 ## Quick Start

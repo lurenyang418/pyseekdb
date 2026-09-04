@@ -31,16 +31,14 @@ def _make_oceanbase_client():
 def _count_sdk_collections(client, collection_name: str) -> int:
     """Count sdk collections."""
     name_escaped = escape_string(collection_name)
-    rows = client._server._execute(
-        f"SELECT COUNT(*) AS cnt FROM sdk_collections WHERE collection_name = '{name_escaped}'"
-    )
+    rows = client._execute(f"SELECT COUNT(*) AS cnt FROM sdk_collections WHERE collection_name = '{name_escaped}'")
     row = rows[0]
     return int(row["cnt"] if isinstance(row, dict) else row[0])
 
 
 def _has_unique_name_index(client) -> bool:
     """Has unique name index."""
-    rows = client._server._execute("SHOW INDEX FROM sdk_collections")
+    rows = client._execute("SHOW INDEX FROM sdk_collections")
     for row in rows:
         key_name = row["Key_name"] if isinstance(row, dict) else row[2]
         if key_name == "uk_sdk_coll_name":

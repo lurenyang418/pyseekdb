@@ -54,13 +54,13 @@ def _schema_search_only() -> Schema:
 def _index_names(client: Any, collection_id: str) -> set[str]:
     """Index names."""
     table = NamespaceCollectionNames.data_table_name(collection_id)
-    rows = client._server._execute(f"SHOW INDEX FROM `{table}`")
+    rows = client._execute(f"SHOW INDEX FROM `{table}`")
     return {(r.get("Key_name") if isinstance(r, dict) else r[2]) for r in (rows or [])}
 
 
 def _collection_settings(client: Any, collection_id: str) -> dict:
     """Collection settings."""
-    rows = client._server._execute(f"SELECT settings FROM sdk_collections WHERE collection_id = '{collection_id}'")
+    rows = client._execute(f"SELECT settings FROM sdk_collections WHERE collection_id = '{collection_id}'")
     raw = rows[0]["settings"] if isinstance(rows[0], dict) else rows[0][0]
     return json.loads(raw) if raw else {}
 

@@ -101,6 +101,10 @@ jobs:
           fi
           uv run pytest tests/unit_tests/ -v --log-cli-level=${log_level}
 
+      - name: Run async API tests
+        run: |
+          uv run --extra async pytest tests/unit_tests/test_async_client.py -v
+
       - name: Run no-server integration tests
         run: |
           if [ "${{ env.RUNNER_DEBUG }}" = "true" ]; then

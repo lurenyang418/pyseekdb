@@ -52,12 +52,12 @@ def _make_collection(client, suffix: str = ""):
 
 def _execute(client, sql: str):
     """Execute."""
-    return client._server._execute(sql)
+    return client._execute(sql)
 
 
 def _catalog_table(client, table: str) -> str:
     """Qualified catalog table in the client's configured database (default: test)."""
-    db = client._server.database
+    db = client.database
     return f"`{db}`.`{table}`"
 
 
@@ -104,7 +104,7 @@ def _count_ltables(client, collection_id: str, namespace_id: int) -> int:
 def _count_logic_schema_rows(client, collection_id: str, namespace_id: int) -> int:
     """Count logic schema rows."""
     tbl = NamespaceCollectionNames.logic_schema_table_name(collection_id)
-    db = client._server.database
+    db = client.database
     rows = _execute(
         client,
         f"SELECT COUNT(*) AS c FROM `{db}`.`{tbl}` WHERE namespace_id = {namespace_id}",
@@ -115,7 +115,7 @@ def _count_logic_schema_rows(client, collection_id: str, namespace_id: int) -> i
 def _count_hot_table_rows(client, collection_id: str, namespace_id: int) -> int:
     """Count hot table rows."""
     tbl = NamespaceCollectionNames.hot_table_name(collection_id)
-    db = client._server.database
+    db = client.database
     try:
         rows = _execute(
             client,
@@ -129,7 +129,7 @@ def _count_hot_table_rows(client, collection_id: str, namespace_id: int) -> int:
 def _count_logic_data_rows(client, collection_id: str, namespace_id: int, ltable_id: int | None = None) -> int:
     """Count logic data rows."""
     tbl = NamespaceCollectionNames.data_table_name(collection_id)
-    db = client._server.database
+    db = client.database
     if ltable_id is not None:
         where = f"namespace_id = {namespace_id} AND ltable_id = {ltable_id}"
     else:
@@ -144,7 +144,7 @@ def _count_logic_data_rows(client, collection_id: str, namespace_id: int, ltable
 def _count_kv_data_rows(client, collection_id: str, namespace_id: int) -> int:
     """Count kv data rows."""
     tbl = NamespaceCollectionNames.kv_data_table_name(collection_id)
-    db = client._server.database
+    db = client.database
     try:
         rows = _execute(
             client,
@@ -177,7 +177,7 @@ def _wait_until(
 def _seed_kv_data(client, collection_id: str, namespace_id: int, count: int = 5):
     """Seed rows in <collection>_kv_data_table (primary target of LTABLE_BG ns delete)."""
     tbl = NamespaceCollectionNames.kv_data_table_name(collection_id)
-    db = client._server.database
+    db = client.database
     values = []
     for i in range(count):
         key_hex = f"{i + 1:064x}"
@@ -191,7 +191,7 @@ def _seed_kv_data(client, collection_id: str, namespace_id: int, count: int = 5)
 def _seed_logic_data(client, collection_id: str, namespace_id: int, ltable_id: int, count: int = 3):
     """Seed logic data."""
     tbl = NamespaceCollectionNames.data_table_name(collection_id)
-    db = client._server.database
+    db = client.database
     values = []
     for i in range(count):
         values.append(
@@ -223,7 +223,7 @@ def _fetch_ltable_id(client, collection_id: str, namespace_id: int) -> int | Non
 def _hot_table_exists(client, collection_id: str) -> bool:
     """Hot table exists."""
     tbl = NamespaceCollectionNames.hot_table_name(collection_id)
-    db = client._server.database
+    db = client.database
     try:
         rows = _execute(
             client,
@@ -242,7 +242,7 @@ def _ensure_hot_table(client, collection_id: str) -> str | None:
     if _hot_table_exists(client, collection_id):
         return None
     tbl = NamespaceCollectionNames.hot_table_name(collection_id)
-    db = client._server.database
+    db = client.database
     tg = NamespaceCollectionNames.tablegroup_name(collection_id)
     ddl_with_tg = (
         f"CREATE TABLE IF NOT EXISTS `{db}`.`{tbl}` ("
@@ -278,7 +278,7 @@ def _seed_hot_table(client, collection_id: str, namespace_id: int):
     if _ensure_hot_table(client, collection_id) is not None:
         return False
     tbl = NamespaceCollectionNames.hot_table_name(collection_id)
-    db = client._server.database
+    db = client.database
     try:
         _execute(
             client,
@@ -354,7 +354,7 @@ def _second_oceanbase_client():
         user=os.environ.get("OB_USER", "root"),
         password=os.environ.get("OB_PASSWORD", ""),
     )
-    result = client._server._execute("SELECT 1 as test")
+    result = client._execute("SELECT 1 as test")
     assert result and result[0].get("test") == 1
     return client
 
@@ -640,7 +640,7 @@ class TestDropNamespaceCatalogValidation:
         collection = _make_collection(client)
         coll_id = collection.id
         schema_tbl = NamespaceCollectionNames.logic_schema_table_name(coll_id)
-        schema_tbl_q = f"`{client._server.database}`.`{schema_tbl}`"
+        schema_tbl_q = f"`{client.database}`.`{schema_tbl}`"
         try:
             ns = _create_namespace(collection, "ns_rollback")
             ns_id = int(ns.namespace_id)

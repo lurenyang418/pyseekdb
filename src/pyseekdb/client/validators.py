@@ -4,6 +4,7 @@ import re
 
 _NAME_PATTERN = re.compile(r"^[A-Za-z0-9_]+$")
 _MAX_NAME_LENGTH = 512
+_MAX_COLLECTION_NAME_LENGTH = _MAX_NAME_LENGTH
 _MAX_NAMESPACE_NAME_LENGTH = 256
 _MAX_NAMESPACE_BATCH_SIZE = 100
 _MAX_N_RESULTS = 16384  # OceanBase vector-search k upper bound
@@ -61,6 +62,26 @@ def _validate_database_name(name: str) -> None:
     if _NAME_PATTERN.match(name) is None:
         raise ValueError(
             f"Invalid database name: '{name}'. Database name contains invalid characters. "
+            "Only letters, digits, and underscore are allowed: [a-zA-Z0-9_]"
+        )
+
+
+def _validate_collection_name(name: str) -> None:
+    """Validate a collection name for type, length, and allowed characters."""
+    if not isinstance(name, str):
+        raise TypeError(
+            f"Invalid collection name: '{name}'. Collection name must be a string, got {type(name).__name__}"
+        )
+    if not name:
+        raise ValueError(f"Invalid collection name: '{name}'. Collection name must not be empty")
+    if len(name) > _MAX_COLLECTION_NAME_LENGTH:
+        raise ValueError(
+            f"Invalid collection name: '{name}'. Collection name too long: "
+            f"{len(name)} characters; maximum allowed is {_MAX_COLLECTION_NAME_LENGTH}."
+        )
+    if _NAME_PATTERN.match(name) is None:
+        raise ValueError(
+            f"Invalid collection name: '{name}'. Collection name contains invalid characters. "
             "Only letters, digits, and underscore are allowed: [a-zA-Z0-9_]"
         )
 

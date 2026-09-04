@@ -24,7 +24,7 @@ class TestCollectionFork:
     @staticmethod
     def _fork_enabled(client) -> bool:
         try:
-            return client._server._fork_table_enabled()
+            return client._fork_table_enabled()
         except Exception:
             logger.exception("Failed to check if fork is enabled")
             return False

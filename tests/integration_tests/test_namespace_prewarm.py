@@ -41,7 +41,7 @@ class TestNamespacePrewarm:
         """Query hot table."""
         coll_id = collection.id
         hot_table = NamespaceCollectionNames.hot_table_name(coll_id)
-        rows = client._server._execute(
+        rows = client._execute(
             f"SELECT namespace_id, last_access_time FROM `{hot_table}` WHERE namespace_id = {namespace_id}"
         )
         return rows

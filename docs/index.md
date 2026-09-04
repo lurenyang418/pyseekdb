@@ -14,7 +14,7 @@ operations, you can use MySQL-compatible drivers to run SQL against seekdb and O
 - **Hybrid Search**: Combine vector and full-text search.
 - **Pluggable Embedding Functions**: Bring your own `EmbeddingFunction` implementation.
 - **Collection Management**: Easy collection (table) creation and management.
-- **Database Management**: Admin operations for database management.
+- **Database Branching**: Fork an existing seekdb database into an isolated branch.
 
 ## Installation
 
@@ -51,21 +51,9 @@ collection = client.get_or_create_collection(
 )
 ```
 
-Admin Client
-
-```python
-import pyseekdb
-
-admin = pyseekdb.AdminClient(
-    host="localhost",
-    port=2881,
-    tenant="sys",
-    user="root",
-    password="pass",
-)
-admin.create_database("new_db")
-databases = admin.list_databases()
-```
+The database must already exist before creating a client. Use your deployment or
+DBA tooling, or a MySQL-compatible driver, to provision databases. pyseekdb does
+not expose database-wide CRUD operations.
 
 ```{toctree}
 :maxdepth: 2

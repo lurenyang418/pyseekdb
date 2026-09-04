@@ -7,16 +7,14 @@ import json
 import logging
 import os
 import re
-import struct
 import time
-from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
 from pymysql.converters import escape_string
 
-from .admin_client import DEFAULT_TENANT, AdminAPI
 from .base_connection import BaseConnection
+from .capabilities import BackendCapabilities
 from .collection import Collection
 from .configuration import (
     DEFAULT_DISTANCE_METRIC,
@@ -24,12 +22,9 @@ from .configuration import (
     LOGIC_DATA_TABLE_LOB_INROW_THRESHOLD,
     MAX_HNSW_VECTOR_DIMENSION,
     MAX_IVF_VECTOR_DIMENSION,
-    FulltextIndexConfig,
     HNSWConfiguration,
-    IVFConfiguration,
     IVFIndexType,
 )
-from .database import Database
 from .document_query_builder import (
     build_document_hybrid_expression,
     doc_matches_where_document,
@@ -46,6 +41,24 @@ from .embedding_function import (
 from .filters import FilterBuilder
 from .kernel_errors import maybe_reraise_friendly_kernel_error, namespace_kernel_error_guard
 from .meta_info import CollectionFieldNames, CollectionNames, NamespaceCollectionNames, NamespaceFieldNames
+from .query_builder import (
+    build_default_ltable_schema as _build_default_ltable_schema,
+)
+from .query_builder import (
+    build_fulltext_index_sql as _get_fulltext_index_sql,
+)
+from .query_builder import (
+    build_ivf_vector_index_sql as _get_ivf_vector_index_sql,
+)
+from .query_builder import (
+    build_sparse_vector_index_sql as _get_sparse_vector_index_sql,
+)
+from .query_builder import (
+    build_vector_index_sql as _get_vector_index_sql,
+)
+from .query_builder import (
+    embedding_to_hexstring as _embedding_to_hexstring,
+)
 from .query_types import QueryHint
 from .schema import Schema, SparseVectorIndexConfig
 from .sparse_embedding_function import (
@@ -57,9 +70,11 @@ from .sparse_embedding_function import (
 from .sql_utils import _query_hint_to_sql, is_query_sql
 from .types import K as FieldKey
 from .validators import (
+    _MAX_COLLECTION_NAME_LENGTH,  # noqa: F401 - kept as an internal compatibility alias
     _MAX_N_RESULTS,
     _MAX_NAMESPACE_BATCH_SIZE,
     _quote_sql_identifier,
+    _validate_collection_name,
     _validate_database_name,
     _validate_namespace_explicit_embedding_dimensions,
     _validate_record_ids,
@@ -69,8 +84,6 @@ from .version import Version
 # Type alias for embedding_function parameter that can be EmbeddingFunction, None, or sentinel
 EmbeddingFunctionParam = EmbeddingFunction[EmbeddingDocuments] | None | Any
 
-_COLLECTION_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_]+$")
-
 # DBMS_HYBRID_SEARCH.GET_SQL may quote a JSON_EXTRACT expression as though it
 # were a column identifier.  Require JSON_EXTRACT to start the quoted content
 # so the match cannot span from one ordinary quoted identifier to another.
@@ -78,9 +91,6 @@ _QUOTED_JSON_EXTRACT_EXPRESSION_PATTERN = re.compile(
     r"`(?P<expression>\s*\(*\s*JSON_EXTRACT\s*\([^`]*\)\s*\)*\s*)`",
     re.IGNORECASE,
 )
-
-# Maximum allowed length for user-facing collection names.
-_MAX_COLLECTION_NAME_LENGTH = 512
 
 # Minimum LakeBase (OceanBase Database AI) version for namespace-enabled collections.
 NAMESPACE_MIN_LAKEBASE_VERSION = Version("4.6.1.0")
@@ -172,201 +182,10 @@ def _reraise_unless_unique_index_exists(exc: BaseException) -> None:
     raise exc
 
 
-def _validate_collection_name(name: str) -> None:
-    """
-    Validate collection name against allowed charset and length constraints.
-
-    Rules:
-    - Type must be str
-    - Length between 1 and _MAX_COLLECTION_NAME_LENGTH
-    - Only [a-zA-Z0-9_]
-
-    Raises:
-        TypeError: If name is not a string.
-        ValueError: If name is empty, too long, or contains invalid characters.
-    """
-    if not isinstance(name, str):
-        raise TypeError(
-            f"Invalid collection name: '{name}'. Collection name must be a string, got {type(name).__name__}"
-        )
-    if not name:
-        raise ValueError(f"Invalid collection name: '{name}'. Collection name must not be empty")
-    if len(name) > _MAX_COLLECTION_NAME_LENGTH:
-        raise ValueError(
-            f"Invalid collection name: '{name}'. Collection name too long: {len(name)} characters; maximum allowed is {_MAX_COLLECTION_NAME_LENGTH}."
-        )
-    if _COLLECTION_NAME_PATTERN.match(name) is None:
-        raise ValueError(
-            f"Invalid collection name: '{name}'. Collection name contains invalid characters. "
-            "Only letters, digits, and underscore are allowed: [a-zA-Z0-9_]"
-        )
-
-
 _DEFAULT_PARTITION_COUNT = 1000
 # Unquoted id for WHERE/CASE; plain JSON_EXTRACT returns a quoted JSON string and
 # can route through SEARCH INDEX on SS logic tables, breaking cross-namespace id lookups.
 _NS_DATA_CONTENT_ID_EXPR = "JSON_UNQUOTE(JSON_EXTRACT(data_content, '$.id'))"
-
-
-def _build_default_ltable_schema(
-    *,
-    has_fulltext: bool = False,
-    has_ivf: bool = False,
-) -> dict:
-    """Return the logical-table schema matching the indexes actually provisioned."""
-    index_info: list[dict[str, Any]] = [
-        {"index_seq": 0, "index_type": "PRIMARY", "indexed_columns": []},
-        {"index_seq": 1, "index_type": "SEARCH_INDEX", "indexed_columns": [1]},
-    ]
-    next_seq = 2
-    if has_fulltext:
-        index_info.append({"index_seq": next_seq, "index_type": "FULLTEXT", "indexed_columns": [2]})
-        next_seq += 1
-    if has_ivf:
-        index_info.append({"index_seq": next_seq, "index_type": "IVF", "indexed_columns": [3]})
-    return {
-        "col_info": [
-            {"col_idx": 1, "col_name": "metadata", "col_type": "JSON"},
-            {"col_idx": 2, "col_name": "content", "col_type": "TEXT"},
-            {"col_idx": 3, "col_name": "embedding", "col_type": "VECTOR"},
-        ],
-        "index_info": index_info,
-    }
-
-
-def _get_fulltext_index_sql(
-    fulltext_config: FulltextIndexConfig | None = None,
-) -> str:
-    """
-    Generate FULLTEXT INDEX SQL clause from fulltext configuration.
-
-    Args:
-        fulltext_config: FulltextIndexConfig or None. If None, defaults to IK parser.
-
-    Returns:
-        SQL clause string for FULLTEXT INDEX (e.g., "WITH PARSER ik" or "WITH PARSER ngram PARSER_PROPERTIES=(size=2)")
-    """
-    if fulltext_config is None:
-        # Default to IK parser for backward compatibility
-        return "WITH PARSER ik"
-
-    parser_name = fulltext_config.analyzer
-    properties = fulltext_config.properties or {}
-
-    # Build SQL clause with parser name
-    if properties:
-        # Format parameters as key=value pairs
-        # Quote string values, leave numbers and booleans as-is
-        param_parts = []
-        for k, v in properties.items():
-            if isinstance(v, str):
-                param_parts.append(f"{k}='{v}'")
-            else:
-                param_parts.append(f"{k}={v}")
-        param_str = ", ".join(param_parts)
-        return f"WITH PARSER {parser_name} PARSER_PROPERTIES=({param_str})"
-    else:
-        return f"WITH PARSER {parser_name}"
-
-
-def _get_vector_index_sql(hnsw_config: HNSWConfiguration) -> str:
-    """
-    Generate VECTOR INDEX SQL clause from HNSWConfiguration.
-    """
-    properties = hnsw_config.properties or {}
-    property_parts = []
-    for k, v in properties.items():
-        if isinstance(v, str):
-            property_parts.append(f"{k}='{v}'")
-        else:
-            property_parts.append(f"{k}={v}")
-    optional_fields = (
-        ("M", hnsw_config.M),
-        ("ef_construction", hnsw_config.ef_construction),
-        ("ef_search", hnsw_config.ef_search),
-        ("extra_info_max_size", hnsw_config.extra_info_max_size),
-        ("refine_k", hnsw_config.refine_k),
-        ("refine_type", hnsw_config.refine_type),
-        ("bq_bits_query", hnsw_config.bq_bits_query),
-        ("bq_use_fht", hnsw_config.bq_use_fht),
-    )
-    for key, value in optional_fields:
-        if value is not None:
-            if isinstance(value, str):
-                property_parts.append(f"{key}='{value}'")
-            elif isinstance(value, bool):
-                property_parts.append(f"{key}={str(value).lower()}")
-            else:
-                property_parts.append(f"{key}={value}")
-    property_str = ", ".join(property_parts)
-    properties_str = f", {property_str}" if property_str else ""
-    return f"WITH (DISTANCE={hnsw_config.distance}, TYPE={hnsw_config.type}, LIB={hnsw_config.lib}{properties_str})"
-
-
-def _get_ivf_vector_index_sql(ivf_config: "IVFConfiguration") -> str:
-    """Build the IVF vector index DDL fragment from an IVFConfiguration."""
-    property_parts = []
-    if ivf_config.properties:
-        for k, v in ivf_config.properties.items():
-            if isinstance(v, str):
-                property_parts.append(f"{k}='{v}'")
-            else:
-                property_parts.append(f"{k}={v}")
-    if ivf_config.centroids_fresh_mode is not None:
-        property_parts.append(f"centroids_fresh_mode={ivf_config.centroids_fresh_mode}")
-    property_str = ", ".join(property_parts)
-    properties_str = f", {property_str}" if property_str else ""
-    return f"WITH (DISTANCE={ivf_config.distance}, TYPE={ivf_config.type.upper()}, LIB={ivf_config.lib.upper()}{properties_str})"
-
-
-def _get_sparse_vector_index_sql(sparse_config: SparseVectorIndexConfig) -> str:
-    """
-    Generate VECTOR INDEX SQL clause for sparse vector index from SparseVectorIndexConfig.
-
-    Example output:
-        WITH (DISTANCE=inner_product, TYPE=sindi, LIB=vsag)
-    """
-    parts = [
-        f"DISTANCE={sparse_config.distance}",
-        f"TYPE={sparse_config.type}",
-        f"LIB={sparse_config.lib}",
-    ]
-    # Add optional parameters only if they differ from defaults
-    if sparse_config.prune is not None:
-        parts.append(f"prune={str(sparse_config.prune).lower()}")
-    if sparse_config.refine is not None:
-        parts.append(f"refine={str(sparse_config.refine).lower()}")
-    if sparse_config.drop_ratio_build is not None:
-        parts.append(f"drop_ratio_build={sparse_config.drop_ratio_build}")
-    if sparse_config.drop_ratio_search is not None:
-        parts.append(f"drop_ratio_search={sparse_config.drop_ratio_search}")
-    if sparse_config.refine_k is not None:
-        parts.append(f"refine_k={sparse_config.refine_k}")
-    if sparse_config.properties:
-        for k, v in sparse_config.properties.items():
-            if isinstance(v, str):
-                parts.append(f"{k}='{v}'")
-            else:
-                parts.append(f"{k}={v}")
-    return f"WITH ({', '.join(parts)})"
-
-
-def _embedding_to_hexstring(embedding: list[float]) -> str:
-    """
-    Convert embedding (list of floats) to a hex string.
-
-    Args:
-        embedding: List of floats
-
-    Returns:
-        Hex string representing the binary serialization of all floats in the list.
-    """
-    if not embedding:
-        return ""
-    # Pack as binary (float32 for compactness, common in vector DBs)
-    binary = struct.pack(f"<{len(embedding)}f", *embedding)
-    hexstr = binary.hex()
-    return f"X'{hexstr}'"
 
 
 @dataclass
@@ -396,7 +215,7 @@ class _CollectionMeta:
         return _CollectionMeta(collection_id=collection_id, collection_name=collection_name, settings=settings)
 
 
-class BaseClient(BaseConnection, AdminAPI):
+class BaseClient(BaseConnection):
     """
     Abstract base class for all clients.
 
@@ -410,7 +229,8 @@ class BaseClient(BaseConnection, AdminAPI):
     - Different clients can have completely different underlying implementations (SQL/gRPC/REST)
     - Easy to extend with new client types
 
-    Inherits connection management from BaseConnection and database operations from AdminAPI.
+    Inherits connection management from BaseConnection. Concrete clients provide the
+    connection lifecycle while this class contains the shared collection implementation.
     """
 
     # ==================== Database Type Detection ====================
@@ -575,164 +395,15 @@ class BaseClient(BaseConnection, AdminAPI):
             f"ob_version()={_truncate(ob_version_str)}"
         )
 
-    # ==================== Database Management (User-facing) ====================
-
-    def _database_tenant(self, tenant: str) -> str | None:
-        """Resolve effective tenant for database operations."""
-        return None
-
-    def _database_context(self, tenant: str | None) -> str:
-        """Yield a context with the active database selected for the connection."""
-        return f" in tenant: {tenant}" if tenant else ""
-
-    def _parse_schema_row(self, row: Any) -> tuple[str | None, str | None, str | None]:
-        """Parse a raw catalog row into a schema descriptor."""
-        if isinstance(row, dict):
-            return (
-                row.get("SCHEMA_NAME"),
-                row.get("DEFAULT_CHARACTER_SET_NAME"),
-                row.get("DEFAULT_COLLATION_NAME"),
-            )
-        if isinstance(row, (tuple, list)):
-            name = row[0] if len(row) > 0 else None
-            charset = row[1] if len(row) > 1 else None
-            collation = row[2] if len(row) > 2 else None
-            return name, charset, collation
-        return None, None, None
-
-    def create_database(self, name: str, tenant: str = DEFAULT_TENANT) -> None:
-        """
-        Create database
-
-        Args:
-            name: database name
-            tenant: tenant name (for OceanBase)
-        """
-        effective_tenant = self._database_tenant(tenant)
-        logger.debug(f"Creating database: {name}{self._database_context(effective_tenant)}")
-        sql = f"CREATE DATABASE IF NOT EXISTS `{name}`"
-        self._execute(sql)
-        logger.debug(f"✅ Database created: {name}{self._database_context(effective_tenant)}")
-
-    def get_database(self, name: str, tenant: str = DEFAULT_TENANT) -> Database:
-        """
-        Get database object
-
-        Args:
-            name: database name
-            tenant: tenant name (for OceanBase)
-        """
-        effective_tenant = self._database_tenant(tenant)
-        logger.debug(f"Getting database: {name}{self._database_context(effective_tenant)}")
-        sql = (
-            "SELECT SCHEMA_NAME, DEFAULT_CHARACTER_SET_NAME, DEFAULT_COLLATION_NAME "
-            "FROM information_schema.SCHEMATA "
-            f"WHERE SCHEMA_NAME = '{name}'"
-        )
-        result = self._execute(sql)
-
-        if not result:
-            raise ValueError(f"Database not found: {name}")
-
-        db_name, charset, collation = self._parse_schema_row(result[0])
-        if not db_name:
-            raise ValueError(f"Database not found: {name}")
-
-        return Database(
-            name=db_name,
-            tenant=effective_tenant,
-            charset=charset,
-            collation=collation,
-        )
-
-    def delete_database(self, name: str, tenant: str = DEFAULT_TENANT) -> None:
-        """
-        Delete database
-
-        Args:
-            name: database name
-            tenant: tenant name (for OceanBase)
-        """
-        effective_tenant = self._database_tenant(tenant)
-        logger.debug(f"Deleting database: {name}{self._database_context(effective_tenant)}")
-        sql = f"DROP DATABASE IF EXISTS `{name}`"
-        self._execute(sql)
-        logger.debug(f"✅ Database deleted: {name}{self._database_context(effective_tenant)}")
-
-    def list_databases(
-        self,
-        limit: int | None = None,
-        offset: int | None = None,
-        tenant: str = DEFAULT_TENANT,
-    ) -> Sequence[Database]:
-        """
-        List all databases
-
-        Args:
-            limit: maximum number of results to return
-            offset: number of results to skip
-            tenant: tenant name (for OceanBase)
-        """
-        effective_tenant = self._database_tenant(tenant)
-        logger.debug(f"Listing databases{self._database_context(effective_tenant)}")
-        sql = "SELECT SCHEMA_NAME, DEFAULT_CHARACTER_SET_NAME, DEFAULT_COLLATION_NAME FROM information_schema.SCHEMATA"
-
-        if limit is not None:
-            if offset is not None:
-                sql += f" LIMIT {offset}, {limit}"
-            else:
-                sql += f" LIMIT {limit}"
-
-        result = self._execute(sql)
-
-        databases = []
-        for row in result:
-            db_name, charset, collation = self._parse_schema_row(row)
-            if not db_name:
-                continue
-            databases.append(
-                Database(
-                    name=db_name,
-                    tenant=effective_tenant,
-                    charset=charset,
-                    collation=collation,
-                )
-            )
-
-        logger.debug(f"✅ Found {len(databases)} databases{self._database_context(effective_tenant)}")
-        return databases
-
-    def fork_database(self, source_name: str, destination_name: str, tenant: str = DEFAULT_TENANT) -> Database:
-        """
-        Fork (duplicate) a database to create a new independent copy.
-
-        Args:
-            source_name: source database name
-            destination_name: destination database name (must not already exist)
-            tenant: tenant name (for OceanBase)
-
-        Returns:
-            Database object for the newly created destination database
-        """
-        if not self._fork_database_enabled():
-            raise ValueError("Fork database is not enabled (requires seekdb >= 1.2.0)")
-
-        effective_tenant = self._database_tenant(tenant)
-        logger.debug(f"Forking database: {source_name} -> {destination_name}{self._database_context(effective_tenant)}")
-        sql = f"FORK DATABASE `{source_name}` TO `{destination_name}`"
-        try:
-            self._execute(sql)
-        except Exception as ex:
-            args = getattr(ex, "args", ())
-            if args and isinstance(args[0], int) and args[0] == 1007:
-                raise ValueError(f"Database '{destination_name}' already exists") from ex
-
-            msg = str(ex).lower()
-            if ("database exists" in msg or "already exists" in msg) and "database" in msg:
-                raise ValueError(f"Database '{destination_name}' already exists") from ex
-            raise
-        logger.debug(f"✅ Successfully forked database '{source_name}' to '{destination_name}'")
-        return self.get_database(destination_name, tenant=tenant)
+    @property
+    def backend_capabilities(self) -> BackendCapabilities:
+        """Return capabilities detected for the connected backend."""
+        cached = getattr(self, "_backend_capabilities", None)
+        if cached is None:
+            backend, version = self.detect_db_type_and_version()
+            cached = BackendCapabilities(backend=backend, version=version)
+            self._backend_capabilities = cached
+        return cached
 
     # ==================== Collection Management (User-facing) ====================
 
@@ -2307,24 +1978,20 @@ class BaseClient(BaseConnection, AdminAPI):
 
     def _fork_table_enabled(self) -> bool:
         """Return whether table fork is enabled on the backend."""
-        db_type, version = self.detect_db_type_and_version()
-        version_110 = Version("1.1.0.0")
-        logger.debug(f"db_type: {db_type}, version: {version}")
-        return db_type.lower() == "seekdb" and version >= version_110
+        return self.backend_capabilities.supports_fork_table
 
     def _fork_database_enabled(self) -> bool:
         """Return whether database fork is enabled on the backend."""
-        db_type, version = self.detect_db_type_and_version()
-        version_120 = Version("1.2.0.0")
-        logger.debug(f"db_type: {db_type}, version: {version}")
-        return db_type.lower() == "seekdb" and version >= version_120
+        return self.backend_capabilities.supports_fork_database
+
+    @property
+    def supports_fork_database(self) -> bool:
+        """Whether the connected backend supports database forking."""
+        return self._fork_database_enabled()
 
     def _refresh_enabled(self) -> bool:
         """Return whether index refresh is enabled on the backend."""
-        db_type, version = self.detect_db_type_and_version()
-        version_130 = Version("1.3.0.0")
-        logger.debug(f"db_type: {db_type}, version: {version}")
-        return db_type.lower() == "seekdb" and version >= version_130
+        return self.backend_capabilities.supports_refresh_index
 
     def refresh_index(self) -> None:
         """

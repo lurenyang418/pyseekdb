@@ -59,5 +59,8 @@ client = pyseekdb.Client(
 | `has_collection()`    | Check if a collection exists                                   |
 | `get_or_create_collection()` | Get an existing collection or create it if it doesn't exist |
 | `count_collection()`  | Count the number of collections in the current database         |
+| `fork_database()`     | Fork the current seekdb database and return a client for the branch |
 
-**Note:** The `Client` factory function returns a proxy that only exposes collection operations. For database management operations, use `AdminClient` (see section 2).
+The client is bound to the database supplied at construction time. The database
+must already exist; provision it with deployment or DBA tooling before creating
+the client.

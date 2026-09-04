@@ -29,7 +29,7 @@ def _new_oceanbase_client() -> Any:
         user=os.environ.get("OB_USER", "root"),
         password=os.environ.get("OB_PASSWORD", ""),
     )
-    result = client._server._execute("SELECT 1 AS test")
+    result = client._execute("SELECT 1 AS test")
     assert result and result[0].get("test") == 1
     return client
 
@@ -51,12 +51,12 @@ class TestNamespaceReconnectAndMultiClient:
                 metadatas={"tag": "before_disconnect"},
             )
 
-            assert client._server.is_connected()
-            client._server._cleanup()
-            assert not client._server.is_connected()
+            assert client.is_connected()
+            client.close()
+            assert not client.is_connected()
 
             collection2 = client.get_collection(coll_name)
-            assert client._server.is_connected()
+            assert client.is_connected()
 
             ns2 = collection2.get_namespace("persist_ns")
             res = ns2.get(ids="doc1", include=["documents", "metadatas"])
@@ -96,7 +96,7 @@ class TestNamespaceReconnectAndMultiClient:
         finally:
             cleanup(client_a, collection)
             with contextlib.suppress(Exception):
-                client_b._server._cleanup()
+                client_b.close()
 
     def test_two_clients_read_write_same_namespace(self, oceanbase_client):
         """Writes from client B should be visible to client A on the same namespace."""
@@ -138,7 +138,7 @@ class TestNamespaceReconnectAndMultiClient:
         finally:
             cleanup(client_a, collection)
             with contextlib.suppress(Exception):
-                client_b._server._cleanup()
+                client_b.close()
 
 
 if __name__ == "__main__":

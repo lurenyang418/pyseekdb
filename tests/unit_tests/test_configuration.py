@@ -21,10 +21,11 @@ from pyseekdb import (  # noqa: E402
     Schema,
     SpaceProperties,
 )
-from pyseekdb.client.client_base import BaseClient, _get_vector_index_sql  # noqa: E402
+from pyseekdb.client.client_base import BaseClient  # noqa: E402
 from pyseekdb.client.client_seekdb_server import RemoteServerClient  # noqa: E402
 from pyseekdb.client.configuration import IVFConfiguration, VectorIndexConfig  # noqa: E402
 from pyseekdb.client.embedding_function import EmbeddingFunction  # noqa: E402
+from pyseekdb.client.query_builder import build_vector_index_sql as _get_vector_index_sql  # noqa: E402
 from pyseekdb.client.types import _NOT_PROVIDED  # noqa: E402
 
 

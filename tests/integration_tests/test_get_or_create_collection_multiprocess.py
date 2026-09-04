@@ -77,7 +77,7 @@ def _import_pyseekdb():
 
 def _relax_oceanbase_query_timeout(client) -> None:
     """Raise OB session query timeout for slow CI mini clusters."""
-    client._server._execute(f"SET ob_query_timeout = {OB_QUERY_TIMEOUT_MICROSECONDS}")
+    client._execute(f"SET ob_query_timeout = {OB_QUERY_TIMEOUT_MICROSECONDS}")
 
 
 def _make_client(client_config: dict[str, Any]):
@@ -99,22 +99,14 @@ def _make_client(client_config: dict[str, Any]):
     raise ValueError(f"unsupported client mode: {mode}")
 
 
-def _make_admin_client(client_config: dict[str, Any]):
-    """Make admin client."""
-    pyseekdb = _import_pyseekdb()
-    mode = client_config["mode"]
-    if mode in ("server", "oceanbase"):
-        admin = pyseekdb.AdminClient(
-            host=client_config["host"],
-            port=client_config["port"],
-            tenant=client_config["tenant"],
-            user=client_config["user"],
-            password=client_config["password"],
-        )
-        if mode == "oceanbase":
-            _relax_oceanbase_query_timeout(admin)
-        return admin
-    raise ValueError(f"unsupported client mode: {mode}")
+def _execute_control_sql(client_config: dict[str, Any], sql: str) -> None:
+    """Run database provisioning SQL through a temporary client connection."""
+    control_config = {**client_config, "database": "information_schema"}
+    client = _make_client(control_config)
+    try:
+        client._execute(sql)
+    finally:
+        client.close()
 
 
 def _get_collection(client, collection_name: str):
@@ -446,7 +438,7 @@ def _mixed_crud_worker(
         output.put({"ok": False, "process_id": process_id, "error_type": type(exc).__name__, "error": str(exc)})
 
 
-def _build_client_config(mode: str) -> tuple[dict[str, Any], Any]:
+def _build_client_config(mode: str) -> dict[str, Any]:
     """Build client config."""
     database = f"test_mp_{uuid.uuid4().hex[:8]}"
 
@@ -473,18 +465,17 @@ def _build_client_config(mode: str) -> tuple[dict[str, Any], Any]:
     else:
         raise ValueError(f"unsupported test mode: {mode}")
 
-    admin = _make_admin_client(client_config)
-    admin.create_database(database)
-    return client_config, admin
+    _execute_control_sql(client_config, f"CREATE DATABASE `{database}`")
+    return client_config
 
 
 @pytest.fixture
 def multiprocess_db(_mode):
     """Multiprocess db."""
-    client_config, admin = _build_client_config(_mode)
+    client_config = _build_client_config(_mode)
     yield client_config
     with contextlib.suppress(Exception):
-        admin.close()
+        _execute_control_sql(client_config, f"DROP DATABASE IF EXISTS `{client_config['database']}`")
 
 
 @pytest.fixture
@@ -564,7 +555,7 @@ class TestGetOrCreateCollectionMultiprocess:
             assert client.has_collection(collection_name)
             collection = _get_collection(client, collection_name)
             assert collection.name == collection_name
-            rows = client._server._execute(
+            rows = client._execute(
                 f"SELECT collection_id FROM sdk_collections WHERE collection_name = '{collection_name}'"
             )
             assert len(rows) == 1, f"expected exactly one sdk_collections row for {collection_name!r}, got {len(rows)}"

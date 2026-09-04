@@ -31,7 +31,7 @@ def _make_oceanbase_client():
 
 def _count_sdk_namespaces(client, collection_id: str, namespace_name: str) -> int:
     """Count sdk namespaces."""
-    rows = client._server._execute(
+    rows = client._execute(
         "SELECT COUNT(*) AS cnt FROM sdk_namespaces "
         f"WHERE collection_id = '{collection_id}' AND namespace_name = '{namespace_name}'"
     )
@@ -41,7 +41,7 @@ def _count_sdk_namespaces(client, collection_id: str, namespace_name: str) -> in
 
 def _count_sdk_ltables(client, collection_id: str, namespace_id: int) -> int:
     """Count sdk ltables."""
-    rows = client._server._execute(
+    rows = client._execute(
         "SELECT COUNT(*) AS cnt FROM sdk_ltables "
         f"WHERE collection_id = '{collection_id}' AND namespace_id = {int(namespace_id)} "
         "AND ltable_name = 'default'"

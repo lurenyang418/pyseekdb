@@ -7,7 +7,8 @@ This guide covers installation, connections, data modeling, and common operation
 :caption: Guide
 
 client-connection
-admin-client
+async-client
+fork-database
 collection-management
 namespace
 dml
