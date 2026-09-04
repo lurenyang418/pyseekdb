@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import logging
@@ -10,7 +11,7 @@ import re
 from typing import Any
 
 from .async_collection import AsyncCollection
-from .capabilities import BackendCapabilities
+from .capabilities import BackendCapabilities, _first_result_value, parse_backend_identity
 from .configuration import (
     DEFAULT_DISTANCE_METRIC,
     DEFAULT_VECTOR_DIMENSION,
@@ -18,13 +19,22 @@ from .configuration import (
     HNSWConfiguration,
 )
 from .embedding_function import EmbeddingFunction, EmbeddingFunctionRegistry
-from .filters import FilterBuilder
+from .fork import build_drop_database_sql
 from .kernel_errors import maybe_reraise_friendly_kernel_error
 from .meta_info import CollectionFieldNames, CollectionNames
 from .query_builder import (
     build_fulltext_index_sql,
+    build_select_clause,
     build_vector_index_sql,
+    build_where_clause,
+    convert_id_from_bytes,
+    embed_texts,
     embedding_to_hexstring,
+    normalize_include_fields,
+    normalize_query_embeddings,
+    parse_row_value,
+    process_get_row,
+    process_query_row,
 )
 from .schema import Schema
 from .sql_utils import _query_hint_to_sql, is_query_sql
@@ -81,6 +91,7 @@ class AsyncClient:
         self.kwargs = kwargs
         self.full_user = f"{user}@{tenant}"
         self._pool: Any = None
+        self._pool_lock: asyncio.Lock | None = None
         self._backend_capabilities: BackendCapabilities | None = None
 
     def _require_driver(self) -> Any:
@@ -92,24 +103,27 @@ class AsyncClient:
     async def _ensure_pool(self) -> Any:
         """Lazily create and return the connection pool."""
         driver = self._require_driver()
-        if self._pool is None or getattr(self._pool, "closed", False):
-            connection_kwargs = dict(self.kwargs)
-            connection_kwargs.pop("db", None)
-            connection_kwargs.pop("database", None)
-            self._pool = await driver.create_pool(
-                host=self.host,
-                port=self.port,
-                user=self.full_user,
-                password=self.password,
-                db=self.database,
-                charset=self.charset,
-                cursorclass=driver.DictCursor,
-                autocommit=True,
-                minsize=self.min_pool_size,
-                maxsize=self.max_pool_size,
-                **connection_kwargs,
-            )
-            logger.info("Connected to remote server pool: %s:%s/%s", self.host, self.port, self.database)
+        if self._pool_lock is None:
+            self._pool_lock = asyncio.Lock()
+        async with self._pool_lock:
+            if self._pool is None or getattr(self._pool, "closed", False):
+                connection_kwargs = dict(self.kwargs)
+                connection_kwargs.pop("db", None)
+                connection_kwargs.pop("database", None)
+                self._pool = await driver.create_pool(
+                    host=self.host,
+                    port=self.port,
+                    user=self.full_user,
+                    password=self.password,
+                    db=self.database,
+                    charset=self.charset,
+                    cursorclass=driver.DictCursor,
+                    autocommit=True,
+                    minsize=self.min_pool_size,
+                    maxsize=self.max_pool_size,
+                    **connection_kwargs,
+                )
+                logger.info("Connected to remote server pool: %s:%s/%s", self.host, self.port, self.database)
         return self._pool
 
     async def _execute(self, sql: str, params: list[Any] | tuple[Any, ...] | None = None) -> Any:
@@ -141,10 +155,14 @@ class AsyncClient:
 
     async def close(self) -> None:
         """Close the pool and wait for all pooled connections to finish."""
-        if self._pool is not None:
-            self._pool.close()
-            await self._pool.wait_closed()
-            self._pool = None
+        if self._pool_lock is None:
+            self._pool_lock = asyncio.Lock()
+        async with self._pool_lock:
+            if self._pool is not None:
+                pool = self._pool
+                pool.close()
+                await pool.wait_closed()
+                self._pool = None
 
     async def __aenter__(self) -> AsyncClient:
         """Enter an async context manager without opening a connection eagerly."""
@@ -161,26 +179,14 @@ class AsyncClient:
 
     async def detect_db_type_and_version(self) -> tuple[str, Any]:
         """Detect the connected server type and version."""
-        rows = await self._execute("SELECT version() AS version")
-        version_value = rows[0].get("version") if rows else None
-        version_text = str(version_value or "").strip()
-        if "seekdb" in version_text.lower():
-            match = re.search(r"seekdb[-\s]v?(\d+(?:\.\d+){2,3})", version_text, re.IGNORECASE)
-            if match:
-                from .version import Version
+        version_rows = await self._execute("SELECT version() AS version")
+        version_value = _first_result_value(version_rows, "version")
+        if version_value and "seekdb" in version_value.lower():
+            return parse_backend_identity(version_value, None)
 
-                return "seekdb", Version(match.group(1))
-
-        rows = await self._execute("SELECT ob_version() AS ob_version")
-        version_value = rows[0].get("ob_version") if rows else None
-        version_text = str(version_value or "").strip()
-        if version_text:
-            from .version import Version
-
-            parts = re.findall(r"\d+", version_text)
-            if len(parts) >= 3:
-                return "oceanbase", Version(".".join(parts[:4]))
-        raise ValueError("Unable to detect database type or server version")
+        ob_version_rows = await self._execute("SELECT ob_version() AS ob_version")
+        ob_version_value = _first_result_value(ob_version_rows, "ob_version")
+        return parse_backend_identity(version_value, ob_version_value)
 
     async def get_backend_capabilities(self) -> BackendCapabilities:
         """Detect and cache backend capabilities for this async client."""
@@ -539,21 +545,9 @@ class AsyncClient:
         where: dict[str, Any] | None,
         where_document: dict[str, Any] | None,
     ) -> tuple[str, list[Any]]:
-        clauses: list[str] = []
-        params: list[Any] = []
-        if ids is not None:
-            id_list = [ids] if isinstance(ids, str) else list(ids)
-            clauses.append("_id IN (" + ", ".join("CAST(%s AS BINARY)" for _ in id_list) + ")")
-            params.extend(id_list)
-        if where:
-            clause, values = FilterBuilder.build_metadata_filter(where)
-            clauses.append(clause)
-            params.extend(values)
-        if where_document:
-            clause, values = FilterBuilder.build_document_filter(where_document)
-            clauses.append(clause)
-            params.extend(values)
-        return (" AND ".join(clauses) if clauses else "1=1"), params
+        id_list = None if ids is None else ([ids] if isinstance(ids, str) else list(ids))
+        where_clause, params = build_where_clause(where, where_document, id_list)
+        return where_clause.removeprefix("WHERE ") or "1=1", params
 
     async def _collection_delete(self, collection: AsyncCollection, **kwargs: Any) -> None:
         ids = kwargs.pop("ids")
@@ -570,9 +564,7 @@ class AsyncClient:
     @staticmethod
     def _include_fields(include: list[str] | None) -> set[str]:
         _validate_include(include)
-        if include is None:
-            return {"documents", "metadatas"}
-        return set(include)
+        return set(normalize_include_fields(include))
 
     async def _collection_get(self, collection: AsyncCollection, **kwargs: Any) -> dict[str, Any]:
         ids = kwargs.pop("ids")
@@ -585,51 +577,40 @@ class AsyncClient:
         include = kwargs.pop("include")
         query_hint = kwargs.pop("query_hint")
         fields = self._include_fields(include)
-        select = ["_id"]
-        if "documents" in fields or "document" in fields:
-            select.append("document")
-        if "metadatas" in fields or "metadata" in fields:
-            select.append("metadata")
-        if "embeddings" in fields or "embedding" in fields:
-            select.append("embedding")
+        include_fields = dict.fromkeys(fields, True)
+        select = build_select_clause(include_fields)
         where_sql, params = self._build_where(ids, where, where_document)
         hint = _query_hint_to_sql(query_hint, CollectionNames.table_name(collection.id))
         rows = await self._execute(
-            f"SELECT {hint} {', '.join(select)} FROM {_quote_sql_identifier(CollectionNames.table_name(collection.id))} "
+            f"SELECT {hint} {select} FROM {_quote_sql_identifier(CollectionNames.table_name(collection.id))} "
             f"WHERE {where_sql} LIMIT %s OFFSET %s",
             [*params, limit, offset],
         )
         result: dict[str, Any] = {"ids": []}
-        if include is None or "documents" in fields or "document" in fields:
+        if "documents" in fields or "document" in fields:
             result["documents"] = []
-        if include is None or "metadatas" in fields or "metadata" in fields:
+        if "metadatas" in fields or "metadata" in fields:
             result["metadatas"] = []
         if "embeddings" in fields or "embedding" in fields:
             result["embeddings"] = []
         for row in rows:
-            result["ids"].append(self._decode_id(row.get("_id")))
+            processed = process_get_row(row, include_fields)
+            result["ids"].append(processed["id"])
             if "documents" in result:
-                result["documents"].append(row.get("document"))
+                result["documents"].append(processed["document"])
             if "metadatas" in result:
-                result["metadatas"].append(self._parse_value(row.get("metadata")) or {})
+                result["metadatas"].append(processed["metadata"] or {})
             if "embeddings" in result:
-                result["embeddings"].append(self._parse_value(row.get("embedding")))
+                result["embeddings"].append(processed["embedding"])
         return result
 
     @staticmethod
     def _decode_id(value: Any) -> str:
-        if isinstance(value, bytes):
-            return value.decode("utf-8", errors="replace")
-        return str(value)
+        return convert_id_from_bytes(value) or ""
 
     @staticmethod
     def _parse_value(value: Any) -> Any:
-        if isinstance(value, str):
-            try:
-                return json.loads(value)
-            except (json.JSONDecodeError, ValueError):
-                return value
-        return value
+        return parse_row_value(value)
 
     async def _collection_query(self, collection: AsyncCollection, **kwargs: Any) -> dict[str, Any]:
         query_embeddings = kwargs.pop("query_embeddings")
@@ -646,22 +627,13 @@ class AsyncClient:
         if query_embeddings is None and query_texts is not None:
             if embedding_function is None:
                 raise ValueError("query_texts requires an embedding function")
-            query_embeddings = embedding_function([query_texts] if isinstance(query_texts, str) else query_texts)
+            query_embeddings = embed_texts(query_texts, embedding_function)
         if query_embeddings is None:
             raise ValueError("Provide query_embeddings or query_texts")
-        vectors = (
-            [query_embeddings]
-            if query_embeddings and isinstance(query_embeddings[0], (int, float))
-            else query_embeddings
-        )
+        vectors = normalize_query_embeddings(query_embeddings)
         fields = self._include_fields(include)
-        select = ["_id"]
-        if include is None or "documents" in fields or "document" in fields:
-            select.append("document")
-        if include is None or "metadatas" in fields or "metadata" in fields:
-            select.append("metadata")
-        if "embeddings" in fields or "embedding" in fields:
-            select.append("embedding")
+        include_fields = dict.fromkeys(fields, True)
+        select = build_select_clause(include_fields)
         where_sql, params = self._build_where(None, where, where_document)
         distance = kwargs.pop("distance", collection.distance or DEFAULT_DISTANCE_METRIC)
         distance_func = {"l2": "l2_distance", "cosine": "cosine_distance", "inner_product": "inner_product"}.get(
@@ -669,9 +641,9 @@ class AsyncClient:
         )
         table = _quote_sql_identifier(CollectionNames.table_name(collection.id))
         all_results = {"ids": [], "distances": []}
-        if include is None or "documents" in fields or "document" in fields:
+        if "documents" in fields or "document" in fields:
             all_results["documents"] = []
-        if include is None or "metadatas" in fields or "metadata" in fields:
+        if "metadatas" in fields or "metadata" in fields:
             all_results["metadatas"] = []
         if "embeddings" in fields or "embedding" in fields:
             all_results["embeddings"] = []
@@ -679,7 +651,7 @@ class AsyncClient:
         for vector in vectors:
             vector_sql = embedding_to_hexstring(vector)
             rows = await self._execute(
-                f"SELECT {hint} {', '.join(select)}, {distance_func}(embedding, {vector_sql}) AS distance "
+                f"SELECT {hint} {select}, {distance_func}(embedding, {vector_sql}) AS distance "
                 f"FROM {table} WHERE {where_sql} ORDER BY {distance_func}(embedding, {vector_sql}) APPROXIMATE LIMIT %s",
                 [*params, n_results],
             )
@@ -689,14 +661,15 @@ class AsyncClient:
             result_metadatas: list[Any] = []
             result_embeddings: list[Any] = []
             for row in rows:
-                result_ids.append(self._decode_id(row.get("_id")))
-                result_distances.append(float(row.get("distance")))
+                processed = process_query_row(row, include_fields)
+                result_ids.append(processed["_id"])
+                result_distances.append(processed["distance"])
                 if "documents" in all_results:
-                    result_documents.append(row.get("document"))
+                    result_documents.append(processed.get("document"))
                 if "metadatas" in all_results:
-                    result_metadatas.append(self._parse_value(row.get("metadata")) or {})
+                    result_metadatas.append(processed.get("metadata") or {})
                 if "embeddings" in all_results:
-                    result_embeddings.append(self._parse_value(row.get("embedding")))
+                    result_embeddings.append(processed.get("embedding"))
             all_results["ids"].append(result_ids)
             all_results["distances"].append(result_distances)
             if "documents" in all_results:
@@ -767,7 +740,7 @@ class AsyncClient:
             if "already exists" in str(exc).lower() and "database" in str(exc).lower():
                 raise ValueError(f"Database '{destination_name}' already exists") from exc
             raise
-        return type(self)(
+        forked = type(self)(
             host=self.host,
             port=self.port,
             tenant=self.tenant,
@@ -779,6 +752,21 @@ class AsyncClient:
             max_pool_size=self.max_pool_size,
             **self.kwargs,
         )
+        forked._fork_parent = self
+        return forked
+
+    async def destroy(self) -> None:
+        """Destroy this client's forked database and close its pool.
+
+        Only clients returned by :meth:`fork_database` can be destroyed this way;
+        ordinary database provisioning and deletion remain outside the SDK.
+        """
+        parent = getattr(self, "_fork_parent", None)
+        if parent is None:
+            raise ValueError("Only a client returned by fork_database() can destroy its database")
+        await self.close()
+        await parent._execute(build_drop_database_sql(self.database))
+        self._fork_parent = None
 
 
 __all__ = ["AsyncClient"]

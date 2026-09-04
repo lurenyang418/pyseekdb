@@ -60,6 +60,7 @@ client = pyseekdb.Client(
 | `get_or_create_collection()` | Get an existing collection or create it if it doesn't exist |
 | `count_collection()`  | Count the number of collections in the current database         |
 | `fork_database()`     | Fork the current seekdb database and return a client for the branch |
+| `destroy()`            | Destroy only a client returned by `fork_database()`              |
 
 The client is bound to the database supplied at construction time. The database
 must already exist; provision it with deployment or DBA tooling before creating

@@ -54,7 +54,11 @@ client = pyseekdb.Client(
 )
 collection = client.get_or_create_collection(
     "my_collection",
-    embedding_function=MyDenseEmbeddingFunction(),
+    schema=pyseekdb.Schema(
+        vector_index=pyseekdb.VectorIndexConfig(
+            embedding_function=MyDenseEmbeddingFunction(),
+        )
+    ),
 )
 
 collection.add(

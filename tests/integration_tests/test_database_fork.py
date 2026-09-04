@@ -40,6 +40,7 @@ class TestDatabaseFork:
         """Forking the bound database returns a directly usable target client."""
         self._require_fork(db_client)
         destination_name = self._unique_name("test_forkdb_dst")
+        forked = None
 
         try:
             forked = db_client.fork_database(destination_name)
@@ -50,7 +51,10 @@ class TestDatabaseFork:
             assert forked.tenant == db_client.tenant
             assert forked.ping()
         finally:
-            self._drop_database(db_client, destination_name)
+            if forked is not None:
+                forked.destroy()
+            else:
+                self._drop_database(db_client, destination_name)
 
     def test_fork_database_destination_already_exists(self, db_client: pyseekdb.Client):
         """Forking to an existing database raises a clear error."""
@@ -69,6 +73,7 @@ class TestDatabaseFork:
         self._require_fork(db_client)
         destination_name = self._unique_name("test_forkdb_data_dst")
         table_name = self._unique_name("fork_table")
+        forked = None
 
         try:
             db_client._execute(f"CREATE TABLE `{table_name}` (id INT PRIMARY KEY, val VARCHAR(100))")
@@ -82,7 +87,10 @@ class TestDatabaseFork:
             assert source_rows[0]["cnt"] == 1
             assert destination_rows[0]["cnt"] == 2
         finally:
-            self._drop_database(db_client, destination_name)
+            if forked is not None:
+                forked.destroy()
+            else:
+                self._drop_database(db_client, destination_name)
             with contextlib.suppress(Exception):
                 db_client._execute(f"DROP TABLE IF EXISTS `{table_name}`")
 
@@ -93,12 +101,15 @@ class TestDatabaseFork:
             self._unique_name("test_forkdb_multi_a"),
             self._unique_name("test_forkdb_multi_b"),
         ]
+        forked_clients = []
 
         try:
             forked_clients = [db_client.fork_database(name) for name in destination_names]
             assert [client.database for client in forked_clients] == destination_names
         finally:
-            for name in destination_names:
+            for client in forked_clients:
+                client.destroy()
+            for name in destination_names[len(forked_clients) :]:
                 self._drop_database(db_client, name)
 
 

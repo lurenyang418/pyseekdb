@@ -197,3 +197,60 @@ jobs:
           fi
           uv run --extra async pytest tests/integration_tests/ -v --log-cli-level=${log_level} \
             -k "${{ matrix.test_mode }}"
+
+  fork-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - seekdb_version: '1.2'
+            image: 'oceanbase/seekdb:1.2.0.0-100000232026041319'
+          - seekdb_version: '1.3'
+            image: 'oceanbase/seekdb:1.3.0.0-100000092026051510'
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v7
+
+      - name: Set up environment
+        uses: ./.github/actions/setup-python-env
+        with:
+          python-version: '3.11'
+          dependency-group: dev
+
+      - name: Start seekdb ${{ matrix.seekdb_version }} container
+        run: |
+          set -euo pipefail
+          docker run --name seekdb-fork-server -p 2881:2881 -d "${{ matrix.image }}"
+          for attempt in {1..30}; do
+            if (echo > /dev/tcp/127.0.0.1/2881) 2>/dev/null; then
+              echo "seekdb ${{ matrix.seekdb_version }} ready after ${attempt} attempt(s)"
+              docker logs seekdb-fork-server
+              exit 0
+            fi
+
+            if [[ "$(docker inspect --format='{{.State.Running}}' seekdb-fork-server 2>/dev/null)" != "true" ]]; then
+              echo "seekdb fork test container stopped before becoming ready" >&2
+              docker logs seekdb-fork-server
+              exit 1
+            fi
+            sleep 2
+          done
+
+          docker logs seekdb-fork-server
+          echo "seekdb fork test container did not become ready within 60 seconds" >&2
+          exit 1
+
+      - name: Run sync and async Fork tests
+        env:
+          CI: 1
+          SERVER_PORT: 2881
+        run: |
+          set -euo pipefail
+          uv run --extra async pytest \
+            tests/integration_tests/test_collection_fork.py \
+            tests/integration_tests/test_database_fork.py \
+            tests/integration_tests/test_async_client.py \
+            -v -k server

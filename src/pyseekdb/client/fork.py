@@ -8,6 +8,12 @@ if TYPE_CHECKING:
     from .client_base import BaseClient
 
 
+def build_drop_database_sql(database_name: str) -> str:
+    """Build the explicit SQL used to destroy a forked database."""
+    _validate_database_name(database_name)
+    return f"DROP DATABASE IF EXISTS {_quote_sql_identifier(database_name)}"
+
+
 def execute_database_fork(client: "BaseClient", destination_name: str) -> None:
     """Fork the client's current database into ``destination_name``.
 
@@ -35,3 +41,6 @@ def execute_database_fork(client: "BaseClient", destination_name: str) -> None:
         if ("database exists" in message or "already exists" in message) and "database" in message:
             raise ValueError(f"Database '{destination_name}' already exists") from exc
         raise
+
+
+__all__ = ["build_drop_database_sql", "execute_database_fork"]

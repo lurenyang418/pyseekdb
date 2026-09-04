@@ -1,6 +1,6 @@
 """Tests for the public synchronous client boundary."""
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -47,6 +47,22 @@ def test_client_fork_returns_client_bound_to_destination() -> None:
     assert forked.kwargs == client.kwargs
 
 
+def test_only_forked_client_can_destroy_its_database() -> None:
+    client = pyseekdb.Client(host="localhost", database="source")
+
+    with pytest.raises(ValueError, match="Only a client returned by fork_database"):
+        client.destroy()
+
+    with patch("pyseekdb.client.sync_client.execute_database_fork"):
+        forked = client.fork_database("destination")
+    client._execute = MagicMock()
+
+    forked.destroy()
+
+    client._execute.assert_called_once_with("DROP DATABASE IF EXISTS `destination`")
+    assert forked._fork_parent is None
+
+
 def test_execute_database_fork_uses_bound_database() -> None:
     """The low-level fork operation always uses the client's source database."""
 
@@ -65,6 +81,15 @@ def test_execute_database_fork_uses_bound_database() -> None:
     execute_database_fork(client, "destination")
 
     assert client.sql == "FORK DATABASE `source` TO `destination`"
+
+
+def test_execute_database_fork_rejects_unsupported_backend() -> None:
+    class FakeClient:
+        database = "source"
+        supports_fork_database = False
+
+    with pytest.raises(ValueError, match=r"requires seekdb >= 1\.2\.0"):
+        execute_database_fork(FakeClient(), "destination")
 
 
 @pytest.mark.parametrize("destination", ["", "bad-name", "source"])

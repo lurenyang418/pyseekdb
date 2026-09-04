@@ -20,6 +20,20 @@ def is_lakebase_version_string(version_str: str) -> bool:
     return _LAKEBASE_VERSION_MARKER in version_str.lower()
 
 
+def _first_result_value(result: Any, key: str) -> str | None:
+    """Extract and normalize the first value from a DB-API result set."""
+    if not result:
+        return None
+    row = result[0]
+    if isinstance(row, dict):
+        value = row.get(key) or row.get(key.upper())
+    elif isinstance(row, (tuple, list)) and row:
+        value = row[0]
+    else:
+        value = row
+    return str(value).strip() if value is not None else None
+
+
 def _query_value(client: Any, sql: str, key: str) -> str | None:
     """Execute a scalar metadata query and normalize its first value."""
     try:
@@ -27,16 +41,7 @@ def _query_value(client: Any, sql: str, key: str) -> str | None:
     except Exception as exc:
         logger.debug("Failed to execute %s: %s", sql, exc)
         return None
-    if not result:
-        return None
-    row = result[0]
-    if isinstance(row, dict):
-        value = row.get(key, "")
-    elif isinstance(row, (tuple, list)) and row:
-        value = row[0]
-    else:
-        value = str(row)
-    return str(value).strip() if value else None
+    return _first_result_value(result, key)
 
 
 def _extract_seekdb_version(version_str: str) -> str | None:
@@ -57,6 +62,30 @@ def _truncate(value: Any, length: int = 20) -> str:
         return "None"
     value_str = str(value)
     return value_str[:length] + ("..." if len(value_str) > length else "")
+
+
+def parse_backend_identity(version_value: Any, ob_version_value: Any) -> tuple[str, Version]:
+    """Parse seekdb/OceanBase identity from the two server version banners."""
+    version_result = str(version_value).strip() if version_value is not None else None
+    if version_result and re.search(r"seekdb", version_result, re.IGNORECASE):
+        seekdb_version = _extract_seekdb_version(version_result)
+        if seekdb_version:
+            return "seekdb", Version(seekdb_version)
+        raise ValueError(f"Detected seekdb in version string, but failed to extract version: {version_result}")
+
+    ob_version = str(ob_version_value).strip() if ob_version_value is not None else None
+    if ob_version:
+        try:
+            return "oceanbase", Version(ob_version)
+        except ValueError as exc:
+            parts = re.findall(r"\d+", ob_version)
+            if len(parts) >= 3:
+                return "oceanbase", Version(".".join(parts[:4]))
+            raise ValueError(f"Unable to parse OceanBase version: {ob_version}") from exc
+
+    raise ValueError(
+        f"Unable to detect database type. version()={_truncate(version_result)}, ob_version()={_truncate(ob_version)}"
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,26 +183,10 @@ class BackendCapabilitiesMixin:
         """Detect the connected backend type and version."""
         self._ensure_connection()
         version_result = _query_value(self, "SELECT version() as version", "version")
-        if version_result and re.search(r"seekdb", version_result, re.IGNORECASE):
-            seekdb_version = _extract_seekdb_version(version_result)
-            if seekdb_version:
-                return "seekdb", Version(seekdb_version)
-            raise ValueError(f"Detected seekdb in version string, but failed to extract version: {version_result}")
-
+        if version_result and "seekdb" in version_result.lower():
+            return parse_backend_identity(version_result, None)
         ob_version = _query_value(self, "SELECT ob_version() as ob_version", "ob_version")
-        if ob_version:
-            try:
-                return "oceanbase", Version(ob_version)
-            except ValueError as exc:
-                parts = re.findall(r"\d+", ob_version)
-                if len(parts) >= 3:
-                    return "oceanbase", Version(".".join(parts[:4]))
-                raise ValueError(f"Unable to parse OceanBase version: {ob_version}") from exc
-
-        raise ValueError(
-            f"Unable to detect database type. version()={_truncate(version_result)}, "
-            f"ob_version()={_truncate(ob_version)}"
-        )
+        return parse_backend_identity(version_result, ob_version)
 
     @property
     def backend_capabilities(self) -> BackendCapabilities:
@@ -191,4 +204,5 @@ __all__ = [
     "BackendCapabilities",
     "BackendCapabilitiesMixin",
     "is_lakebase_version_string",
+    "parse_backend_identity",
 ]

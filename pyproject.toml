@@ -26,6 +26,7 @@ Repository = "https://github.com/oceanbase/pyseekdb/"
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
+    "pytest-asyncio>=1.4,<2",
     "ruff>=0.16.6",
 ]
 docs = [

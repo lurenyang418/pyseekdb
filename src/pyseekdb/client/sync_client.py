@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 
 from .client_seekdb_server import RemoteServerClient
-from .fork import execute_database_fork
+from .fork import build_drop_database_sql, execute_database_fork
 
 
 class Client(RemoteServerClient):
@@ -52,7 +52,7 @@ class Client(RemoteServerClient):
         ``FORK DATABASE`` statement.
         """
         execute_database_fork(self, destination_name)
-        return type(self)(
+        forked = type(self)(
             host=self.host,
             port=self.port,
             tenant=self.tenant,
@@ -62,6 +62,21 @@ class Client(RemoteServerClient):
             charset=self.charset,
             **self.kwargs,
         )
+        forked._fork_parent = self
+        return forked
+
+    def destroy(self) -> None:
+        """Destroy this client's forked database and close its connection.
+
+        Only clients returned by :meth:`fork_database` can be destroyed this way;
+        ordinary database provisioning and deletion remain outside the SDK.
+        """
+        parent = getattr(self, "_fork_parent", None)
+        if parent is None:
+            raise ValueError("Only a client returned by fork_database() can destroy its database")
+        self.close()
+        parent._execute(build_drop_database_sql(self.database))
+        self._fork_parent = None
 
 
 __all__ = ["Client"]
