@@ -5,99 +5,19 @@ Supports both seekdb Server and OceanBase Server
 
 import logging
 
-import pymysql
-from pymysql.cursors import DictCursor
-
 from .client_base import BaseClient
+from .connection import MySQLConnectionMixin
 from .kernel_errors import namespace_kernel_error_guard
 
 logger = logging.getLogger(__name__)
 
 
-class RemoteServerClient(BaseClient):
+class RemoteServerClient(MySQLConnectionMixin, BaseClient):
     """Remote server mode client (connecting via pymysql, lazy loading)
 
     Supports both seekdb Server and OceanBase Server.
     Uses user@tenant format for authentication.
     """
-
-    def __init__(
-        self,
-        host: str = "localhost",
-        port: int = 2881,
-        tenant: str = "sys",
-        database: str = "test",
-        user: str = "root",
-        password: str = "",
-        charset: str = "utf8mb4",
-        **kwargs,
-    ):
-        """
-        Initialize remote server mode client (no immediate connection)
-
-        Args:
-            host: server address
-            port: server port (default 2881)
-            tenant: tenant name (default "sys" for seekdb Server, "test" for OceanBase)
-            database: database name
-            user: username (without tenant suffix)
-            password: password
-            charset: charset (default "utf8mb4")
-            **kwargs: other pymysql connection parameters
-        """
-        self.host = host
-        self.port = port
-        self.tenant = tenant
-        self.database = database
-        self.user = user
-        self.password = password
-        self.charset = charset
-        self.kwargs = kwargs
-
-        # Remote server username format: user@tenant
-        self.full_user = f"{user}@{tenant}"
-        self._connection = None
-
-        logger.debug(f"Initialize RemoteServerClient: {self.full_user}@{self.host}:{self.port}/{self.database}")
-
-    # ==================== Connection Management ====================
-
-    def _ensure_connection(self) -> pymysql.Connection:
-        """Ensure connection is established (internal method)"""
-        if self._connection is None or not self._connection.open:
-            self._connection = pymysql.connect(
-                host=self.host,
-                port=self.port,
-                user=self.full_user,  # Remote server format: user@tenant
-                password=self.password,
-                database=self.database,
-                charset=self.charset,
-                cursorclass=DictCursor,
-                autocommit=True,
-                **self.kwargs,
-            )
-            logger.info(f"✅ Connected to remote server: {self.host}:{self.port}/{self.database}")
-            try:
-                self._use_catalog_database()
-            except Exception as exc:
-                logger.warning("Failed to initialize catalog database on connect: %s", exc)
-
-        return self._connection
-
-    def _cleanup(self):
-        """Internal cleanup method: close connection)"""
-        if self._connection is not None:
-            self._connection.close()
-            self._connection = None
-            logger.info(f"Connection closed: {self.host}:{self.port}/{self.database}")
-
-    def is_connected(self) -> bool:
-        """Check connection status"""
-        return self._connection is not None and self._connection.open
-
-    def get_raw_connection(self) -> pymysql.Connection:
-        """Get raw connection object"""
-        return self._ensure_connection()
 
     # ==================== Collection Management (framework) ====================
 

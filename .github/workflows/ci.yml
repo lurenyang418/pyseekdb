@@ -161,7 +161,7 @@ jobs:
       - name: Start seekdb server container
         if: matrix.test_mode == 'server'
         run: |
-          docker run --name seekdb-server -p 2881:2881 -d oceanbase/seekdb:1.0.0.0-100000262025111218
+          docker run --name seekdb-server -p 2881:2881 -d oceanbase/seekdb:1.3.0.0-100000092026051510
           for attempt in {1..30}; do
             if (echo > /dev/tcp/127.0.0.1/2881) 2>/dev/null; then
               echo "seekdb server ready after ${attempt} attempt(s)"
@@ -195,5 +195,5 @@ jobs:
           else
             log_level=INFO
           fi
-          uv run pytest tests/integration_tests/ -v --log-cli-level=${log_level} \
+          uv run --extra async pytest tests/integration_tests/ -v --log-cli-level=${log_level} \
             -k "${{ matrix.test_mode }}"

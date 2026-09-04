@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from pyseekdb.client.client_base import NAMESPACE_MIN_LAKEBASE_VERSION
+from pyseekdb.client.capabilities import NAMESPACE_MIN_LAKEBASE_VERSION
 
 _OB_NAMESPACE_SUPPORT: tuple[bool, str] | None = None
 _OB_CONNECTION_AVAILABLE: tuple[bool, str] | None = None

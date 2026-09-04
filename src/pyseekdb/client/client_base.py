@@ -5,7 +5,6 @@ Base client interface definition
 import contextlib
 import json
 import logging
-import os
 import re
 import time
 from dataclasses import dataclass
@@ -14,7 +13,7 @@ from typing import Any
 from pymysql.converters import escape_string
 
 from .base_connection import BaseConnection
-from .capabilities import BackendCapabilities
+from .capabilities import BackendCapabilitiesMixin
 from .collection import Collection
 from .configuration import (
     DEFAULT_DISTANCE_METRIC,
@@ -39,7 +38,7 @@ from .embedding_function import (
     EmbeddingFunctionRegistry,
 )
 from .filters import FilterBuilder
-from .kernel_errors import maybe_reraise_friendly_kernel_error, namespace_kernel_error_guard
+from .kernel_errors import namespace_kernel_error_guard
 from .meta_info import CollectionFieldNames, CollectionNames, NamespaceCollectionNames, NamespaceFieldNames
 from .query_builder import (
     build_default_ltable_schema as _build_default_ltable_schema,
@@ -51,13 +50,46 @@ from .query_builder import (
     build_ivf_vector_index_sql as _get_ivf_vector_index_sql,
 )
 from .query_builder import (
+    build_select_clause as _build_select_clause_fragment,
+)
+from .query_builder import (
     build_sparse_vector_index_sql as _get_sparse_vector_index_sql,
 )
 from .query_builder import (
     build_vector_index_sql as _get_vector_index_sql,
 )
 from .query_builder import (
+    build_where_clause as _build_where_clause_fragment,
+)
+from .query_builder import (
+    convert_id_from_bytes as _convert_id_from_bytes_fragment,
+)
+from .query_builder import (
+    convert_id_to_sql as _convert_id_to_sql_fragment,
+)
+from .query_builder import (
+    convert_id_to_sql_with_parameters as _convert_id_to_sql_with_parameters_fragment,
+)
+from .query_builder import (
+    embed_texts as _embed_texts_fragment,
+)
+from .query_builder import (
     embedding_to_hexstring as _embedding_to_hexstring,
+)
+from .query_builder import (
+    normalize_include_fields as _normalize_include_fields_fragment,
+)
+from .query_builder import (
+    normalize_query_embeddings as _normalize_query_embeddings_fragment,
+)
+from .query_builder import (
+    parse_row_value as _parse_row_value_fragment,
+)
+from .query_builder import (
+    process_get_row as _process_get_row_fragment,
+)
+from .query_builder import (
+    process_query_row as _process_query_row_fragment,
 )
 from .query_types import QueryHint
 from .schema import Schema, SparseVectorIndexConfig
@@ -67,7 +99,7 @@ from .sparse_embedding_function import (
     SparseVector,
     _sparse_vector_to_sql,
 )
-from .sql_utils import _query_hint_to_sql, is_query_sql
+from .sql_utils import _query_hint_to_sql
 from .types import K as FieldKey
 from .validators import (
     _MAX_COLLECTION_NAME_LENGTH,  # noqa: F401 - kept as an internal compatibility alias
@@ -79,7 +111,6 @@ from .validators import (
     _validate_namespace_explicit_embedding_dimensions,
     _validate_record_ids,
 )
-from .version import Version
 
 # Type alias for embedding_function parameter that can be EmbeddingFunction, None, or sentinel
 EmbeddingFunctionParam = EmbeddingFunction[EmbeddingDocuments] | None | Any
@@ -92,11 +123,6 @@ _QUOTED_JSON_EXTRACT_EXPRESSION_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-# Minimum LakeBase (OceanBase Database AI) version for namespace-enabled collections.
-NAMESPACE_MIN_LAKEBASE_VERSION = Version("4.6.1.0")
-
-_LAKEBASE_VERSION_MARKER = "database ai"
-
 logger = logging.getLogger(__name__)
 
 from .types import _NOT_PROVIDED  # noqa: E402
@@ -105,11 +131,6 @@ from .types import _NOT_PROVIDED  # noqa: E402
 def _unquote_json_extract_expressions(query_sql: str) -> str:
     """Unquote JSON_EXTRACT expressions without touching adjacent SQL identifiers."""
     return _QUOTED_JSON_EXTRACT_EXPRESSION_PATTERN.sub(r"\g<expression>", query_sql)
-
-
-def is_lakebase_version_string(version_str: str) -> bool:
-    """Return whether a ``SELECT version()`` string identifies a LakeBase cluster."""
-    return _LAKEBASE_VERSION_MARKER in version_str.lower()
 
 
 def _extract_collection_id_from_sdk_row(row: Any) -> str:
@@ -215,7 +236,7 @@ class _CollectionMeta:
         return _CollectionMeta(collection_id=collection_id, collection_name=collection_name, settings=settings)
 
 
-class BaseClient(BaseConnection):
+class BaseClient(BackendCapabilitiesMixin, BaseConnection):
     """
     Abstract base class for all clients.
 
@@ -232,178 +253,6 @@ class BaseClient(BaseConnection):
     Inherits connection management from BaseConnection. Concrete clients provide the
     connection lifecycle while this class contains the shared collection implementation.
     """
-
-    # ==================== Database Type Detection ====================
-
-    def _validate_ob_database_type(self) -> None:
-        """Validate that the backend is LakeBase and meets the minimum version for namespaces."""
-        db_type, version = self.detect_db_type_and_version()
-        if db_type.lower() != "oceanbase":
-            raise ValueError("use_namespace=True is only supported on LakeBase (OceanBase Database AI)")
-        if not self._is_lakebase_cluster():
-            raise ValueError(
-                "use_namespace=True is only supported on LakeBase (OceanBase Database AI); "
-                "the connected cluster is standard OceanBase"
-            )
-        if version < NAMESPACE_MIN_LAKEBASE_VERSION:
-            raise ValueError(
-                f"use_namespace=True requires LakeBase version >= {NAMESPACE_MIN_LAKEBASE_VERSION}, "
-                f"current version is {version}"
-            )
-
-    def _is_lakebase_cluster(self) -> bool:
-        """Return whether the connected OceanBase cluster is LakeBase (OceanBase Database AI)."""
-        cached = getattr(self, "_lakebase_cluster", None)
-        if cached is not None:
-            return cached
-        result = False
-        try:
-            rows = self._execute("SELECT version() AS version")
-            if rows:
-                row = rows[0]
-                if isinstance(row, dict):
-                    version_str = row.get("version") or row.get("VERSION") or ""
-                elif isinstance(row, (tuple, list)) and row:
-                    version_str = row[0]
-                else:
-                    version_str = str(row)
-                result = is_lakebase_version_string(str(version_str))
-        except Exception:
-            result = False
-        self._lakebase_cluster = result
-        return result
-
-    def _is_shared_storage_mode(self) -> bool:
-        """Return whether the OceanBase deployment runs in shared-storage mode."""
-        cached = getattr(self, "_shared_storage", None)
-        if cached is not None:
-            return cached
-        result = False
-        try:
-            rows = self._execute("SELECT VALUE FROM oceanbase.GV$OB_PARAMETERS WHERE name = 'ob_startup_mode'")
-            if rows:
-                val = rows[0][0] if isinstance(rows[0], (list, tuple)) else rows[0]["VALUE"]
-                result = str(val).upper() == "SHARED_STORAGE"
-        except Exception:
-            result = False
-        self._shared_storage = result
-        return result
-
-    def _stg_cache_policy_clause(self) -> str:
-        """SS mode: make catalog tables global-hot so metadata is locally cached.
-
-        STORAGE_CACHE_POLICY is only supported in shared-storage mode; SN mode
-        returns an empty string.
-        """
-        if self._is_shared_storage_mode():
-            return 'STORAGE_CACHE_POLICY = (GLOBAL = "hot")'
-        return ""
-
-    def detect_db_type_and_version(self) -> tuple[str, "Version"]:
-        """
-        Detect database type and version.
-
-        Works for both server modes: seekdb-server and oceanbase.
-        Version detection is case-insensitive for seekdb.
-
-        Returns:
-            (db_type, version): ("seekdb", Version("x.x.x.x")) or ("oceanbase", Version("x.x.x.x"))
-
-        Raises:
-            ValueError: If unable to detect database type or version
-
-        Examples:
-            >>> db_type, version = client.detect_db_type_and_version()
-            >>> version > Version("1.0.0.0")
-            True
-        """
-        from .version import Version
-
-        def _get_value(result, key: str) -> str | None:
-            """Extract value from query result"""
-            if not result or len(result) == 0:
-                return None
-            row = result[0]
-            if isinstance(row, dict):
-                value = row.get(key, "")
-            elif isinstance(row, (tuple, list)) and len(row) > 0:
-                value = row[0]
-            else:
-                value = str(row)
-            return str(value).strip() if value else None
-
-        def _query(sql: str, key: str) -> str | None:
-            """Execute SQL and return value"""
-            try:
-                result = self._execute(sql)
-                return _get_value(result, key)
-            except Exception as e:
-                logger.debug(f"Failed to execute {sql}: {e}")
-                return None
-
-        def _extract_seekdb_version(version_str: str) -> str | None:
-            """Extract version from seekdb version string (case-insensitive)"""
-            # Use case-insensitive pattern matching
-            for pattern in [
-                r"seekdb[-\s]v?(\d+\.\d+\.\d+\.\d+)",
-                r"seekdb[-\s]v?(\d+\.\d+\.\d+)",
-            ]:
-                match = re.search(pattern, version_str, re.IGNORECASE)
-                if match:
-                    return match.group(1)
-            return None
-
-        # Ensure connection is established
-        self._ensure_connection()
-
-        # Check version() for seekdb (case-insensitive)
-        version_result = _query("SELECT version() as version", "version")
-        if version_result and re.search(r"seekdb", version_result, re.IGNORECASE):
-            seekdb_version_str = _extract_seekdb_version(version_result)
-            if seekdb_version_str:
-                return ("seekdb", Version(seekdb_version_str))
-            else:
-                raise ValueError(f"Detected seekdb in version string, but failed to extract version: {version_result}")
-        # Query ob_version() for OceanBase
-        ob_version_str = _query("SELECT ob_version() as ob_version", "ob_version")
-        if ob_version_str:
-            # Try to parse OceanBase version (may have different format)
-            try:
-                return ("oceanbase", Version(ob_version_str))
-            except ValueError as e:
-                # If OceanBase version doesn't match standard format, try to extract numeric parts
-                parts = re.findall(r"\d+", ob_version_str)
-                if len(parts) >= 3:
-                    # Take first 3 or 4 parts
-                    version_str = ".".join(parts[:4] if len(parts) >= 4 else parts[:3])
-                    return ("oceanbase", Version(version_str))
-                else:
-                    # Fallback: return as-is but wrap in Version with minimal format
-                    # This handles edge cases where version format is unusual
-                    raise ValueError(f"Unable to parse OceanBase version: {ob_version_str}") from e
-
-        # Truncate potentially verbose or sensitive database responses in error message
-        def _truncate(val, length=20):
-            """Truncate a value to a short string for logging."""
-            if val is None:
-                return "None"
-            val_str = str(val)
-            return val_str[:length] + ("..." if len(val_str) > length else "")
-
-        raise ValueError(
-            f"Unable to detect database type. version()={_truncate(version_result)}, "
-            f"ob_version()={_truncate(ob_version_str)}"
-        )
-
-    @property
-    def backend_capabilities(self) -> BackendCapabilities:
-        """Return capabilities detected for the connected backend."""
-        cached = getattr(self, "_backend_capabilities", None)
-        if cached is None:
-            backend, version = self.detect_db_type_and_version()
-            cached = BackendCapabilities(backend=backend, version=version)
-            self._backend_capabilities = cached
-        return cached
 
     # ==================== Collection Management (User-facing) ====================
 
@@ -2740,47 +2589,12 @@ class BaseClient(BaseConnection):
     def _normalize_query_embeddings(
         self, query_embeddings: list[float] | list[list[float]] | None
     ) -> list[list[float]]:
-        """
-        Normalize query embeddings to list of lists format
-
-        Args:
-            query_embeddings: Single vector or list of embeddings
-
-        Returns:
-            List of embeddings (each vector is a list of floats)
-        """
-        if query_embeddings is None:
-            return []
-
-        # Check if it's a single vector (list of numbers)
-        if query_embeddings and isinstance(query_embeddings[0], (int, float)):
-            return [query_embeddings]
-
-        return query_embeddings
+        """Normalize query embeddings to a list of vectors."""
+        return _normalize_query_embeddings_fragment(query_embeddings)
 
     def _normalize_include_fields(self, include: list[str] | None) -> dict[str, bool]:
-        """
-        Normalize include parameter to a dictionary
-
-        Args:
-            include: List of fields to include (e.g., ["documents", "metadatas", "embeddings"])
-
-        Returns:
-            Dictionary with field names as keys and True as values
-            Default includes: documents, metadatas (but not embeddings)
-        """
-        # Default includes documents and metadatas
-        default_fields = {"documents": True, "metadatas": True}
-
-        if include is None:
-            return default_fields
-
-        # Build include dict from list
-        include_dict = {}
-        for field in include:
-            include_dict[field] = True
-
-        return include_dict
+        """Normalize the optional result-field list."""
+        return _normalize_include_fields_fragment(include)
 
     def _embed_texts(
         self,
@@ -2788,125 +2602,12 @@ class BaseClient(BaseConnection):
         embedding_function: EmbeddingFunction[EmbeddingDocuments] | None = None,
         **kwargs,
     ) -> list[list[float]]:
-        """
-        Embed text(s) to vector(s)
-
-        Args:
-            texts: Single text or list of texts
-            embedding_function: EmbeddingFunction instance to convert texts to embeddings.
-                               Must implement __call__ method that accepts Documents
-                               and returns Embeddings (List[List[float]]).
-                               If not provided, raises NotImplementedError.
-            **kwargs: Additional parameters for embedding (unused for now)
-
-        Returns:
-            List of embeddings (List[List[float]]), where each inner list is an embedding vector
-
-        Raises:
-            NotImplementedError: If embedding_function is not provided
-        """
-        if embedding_function is None:
-            raise NotImplementedError(
-                "Text embedding is not implemented. "
-                "Please provide query_embeddings directly or set embedding_function in collection."
-            )
-
-        # Normalize texts to list
-        if isinstance(texts, str):
-            texts = [texts]
-
-        # Use embedding function to generate embeddings
-        return embedding_function(texts)
-
-    def _normalize_row(self, row: Any, cursor_description: Any | None = None) -> dict[str, Any]:
-        """
-        Normalize database row to dictionary format
-
-        Args:
-            row: Database row (can be dict or tuple)
-            cursor_description: Cursor description for tuple rows
-
-        Returns:
-            Dictionary with column names as keys
-        """
-        if isinstance(row, dict):
-            return row
-
-        # Convert tuple to dict using cursor description
-        if cursor_description is not None:
-            row_dict = {}
-            for idx, col_desc in enumerate(cursor_description):
-                row_dict[col_desc[0]] = row[idx]
-            return row_dict
-
-        # Fallback: assume it's already a dict or try to convert
-        return dict(row) if hasattr(row, "_asdict") else row
-
-    def _execute_query_with_cursor(
-        self, conn: Any, sql: str, params: list[Any], use_context_manager: bool = True
-    ) -> list[dict[str, Any]]:
-        """
-        Execute SQL query and return normalized rows
-
-        Args:
-            conn: Database connection
-            sql: SQL query string
-            params: Query parameters
-            use_context_manager: Whether to use context manager for cursor (default: True)
-
-        Returns:
-            List of normalized row dictionaries
-        """
-        if os.environ.get("PYSEEKDB_PRINT_SQL", "").lower() in ("1", "true", "yes"):
-            print(f"[pyseekdb SQL] {sql}  -- params={params}", flush=True)
-        try:
-            if use_context_manager:
-                with conn.cursor() as cursor:
-                    cursor.execute(sql, params)
-                    if not self._should_fetch_results(cursor, sql):
-                        return []
-                    rows = cursor.fetchall()
-                    # Normalize rows
-                    normalized_rows = []
-                    for row in rows:
-                        normalized_rows.append(self._normalize_row(row, cursor.description))
-                    return normalized_rows
-            cursor = conn.cursor()
-            try:
-                cursor.execute(sql, params)
-                if not self._should_fetch_results(cursor, sql):
-                    return []
-                rows = cursor.fetchall()
-                # Normalize rows
-                normalized_rows = []
-                for row in rows:
-                    normalized_rows.append(self._normalize_row(row, cursor.description))
-                return normalized_rows
-            finally:
-                cursor.close()
-        except Exception as exc:
-            maybe_reraise_friendly_kernel_error(exc)
-            raise
+        """Generate vectors through the configured embedding function."""
+        return _embed_texts_fragment(texts, embedding_function, **kwargs)
 
     def _build_select_clause(self, include_fields: dict[str, bool]) -> str:
-        """
-        Build SELECT clause based on include fields
-
-        Args:
-            include_fields: Dictionary of fields to include
-
-        Returns:
-            SELECT clause string
-        """
-        select_fields = ["_id"]
-        if include_fields.get("embeddings") or include_fields.get("embedding"):
-            select_fields.append("embedding")
-        if include_fields.get("documents") or include_fields.get("document"):
-            select_fields.append("document")
-        if include_fields.get("metadatas") or include_fields.get("metadata"):
-            select_fields.append("metadata")
-
-        return ", ".join(select_fields)
+        """Build the collection SELECT field list."""
+        return _build_select_clause_fragment(include_fields)
 
     def _build_where_clause(
         self,
@@ -2914,233 +2615,32 @@ class BaseClient(BaseConnection):
         where_document: dict[str, Any] | None = None,
         id_list: list[str] | None = None,
     ) -> tuple[str, list[Any]]:
-        """
-        Build WHERE clause from filters
-
-        Args:
-            where: Metadata filter
-            where_document: Document filter
-            id_list: List of IDs to filter
-
-        Returns:
-            Tuple of (where_clause, params)
-        """
-        where_clauses = []
-        params = []
-
-        # Add ids filter if provided
-        if id_list:
-            # Process IDs for varbinary(512) _id field - support any string format
-            processed_ids = []
-            for id_val in id_list:
-                if not isinstance(id_val, str):
-                    id_val = str(id_val)
-                id_sql, id_param = self._convert_id_to_sql_with_paramters(id_val)
-                processed_ids.append(id_sql)
-                params.append(id_param)
-
-            where_clauses.append(f"_id IN ({','.join(processed_ids)})")
-
-        # Add metadata filter
-        if where:
-            meta_clause, meta_params = FilterBuilder.build_metadata_filter(where, "metadata")
-            if meta_clause:
-                where_clauses.append(meta_clause)
-                params.extend(meta_params)
-
-        # Add document filter
-        if where_document:
-            doc_clause, doc_params = FilterBuilder.build_document_filter(where_document, "document")
-            if doc_clause:
-                where_clauses.append(doc_clause)
-                params.extend(doc_params)
-
-        where_clause = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
-        return where_clause, params
+        """Build a parameterized WHERE clause for collection queries."""
+        return _build_where_clause_fragment(where, where_document, id_list)
 
     def _parse_row_value(self, value: Any) -> Any:
-        """
-        Parse row value (handle JSON strings)
-
-        Args:
-            value: Raw value from database
-
-        Returns:
-            Parsed value
-        """
-        if value is None:
-            return None
-
-        if isinstance(value, str):
-            try:
-                return json.loads(value)
-            except (json.JSONDecodeError, ValueError):
-                return value
-
-        return value
+        """Decode JSON text returned by a database row when possible."""
+        return _parse_row_value_fragment(value)
 
     def _convert_id_to_sql(self, id_val: str) -> str:
-        """
-        Convert string ID to SQL format for varbinary(512) _id field
-
-        Args:
-            id_val: String ID (can be any string like "id1", "item-123", etc.)
-
-        Returns:
-            SQL expression to convert string to binary (e.g., "CAST('id1' AS BINARY)")
-        """
-        if not isinstance(id_val, str):
-            id_val = str(id_val)
-
-        # Use pymysql's escape_string for safe escaping
-        id_val_escaped = escape_string(id_val)
-        # Use CAST to convert string to binary for varbinary(512) field
-        return f"CAST('{id_val_escaped}' AS BINARY)"
+        """Build an escaped CAST expression for a binary record ID."""
+        return _convert_id_to_sql_fragment(id_val)
 
     def _convert_id_to_sql_with_paramters(self, id_val: str) -> (str, str):
-        """
-        Convert ID to SQL format for varbinary(512) _id field with parameters
-        """
-        return "CAST(%s AS BINARY)", (id_val)
+        """Build a parameterized CAST expression for a binary record ID."""
+        return _convert_id_to_sql_with_parameters_fragment(id_val)
 
     def _convert_id_from_bytes(self, record_id: Any) -> str:
-        """
-        Convert _id from bytes to string format
-
-        Args:
-            record_id: Record ID from database (can be bytes, str, or other format)
-
-        Returns:
-            String ID
-        """
-        if record_id is None:
-            return None
-
-        # If it's already a string, return as is
-        if isinstance(record_id, str):
-            return record_id
-
-        # Convert bytes to string (UTF-8 decode)
-        if isinstance(record_id, bytes):
-            try:
-                return record_id.decode("utf-8")
-            except UnicodeDecodeError:
-                # If UTF-8 decode fails, return hex representation as fallback
-                return record_id.hex()
-
-        # For other formats, convert to string
-        return str(record_id)
+        """Convert a database binary ID to its string representation."""
+        return _convert_id_from_bytes_fragment(record_id)
 
     def _process_query_row(self, row: dict[str, Any], include_fields: dict[str, bool]) -> dict[str, Any]:
-        """
-        Process a row from query results
-
-        Args:
-            row: Normalized row dictionary
-            include_fields: Fields to include
-
-        Returns:
-            Result item dictionary
-        """
-        # Convert _id from bytes to string format
-        record_id = self._convert_id_from_bytes(row["_id"])
-        result_item = {"_id": record_id}
-
-        if "document" in row and row["document"] is not None:
-            result_item["document"] = row["document"]
-
-        if "embedding" in row and row["embedding"] is not None:
-            result_item["embedding"] = self._parse_row_value(row["embedding"])
-
-        if "metadata" in row and row["metadata"] is not None:
-            result_item["metadata"] = self._parse_row_value(row["metadata"])
-
-        if "distance" in row:
-            result_item["distance"] = float(row["distance"])
-
-        return result_item
+        """Normalize one vector-query result row."""
+        return _process_query_row_fragment(row, include_fields)
 
     def _process_get_row(self, row: dict[str, Any], include_fields: dict[str, bool]) -> dict[str, Any]:
-        """
-        Process a row from get results
-
-        Args:
-            row: Normalized row dictionary
-            include_fields: Fields to include
-
-        Returns:
-            Result item dictionary with id, document, embedding, metadata
-        """
-        # Convert _id from bytes to string format
-        record_id = self._convert_id_from_bytes(row["_id"])
-
-        document = None
-        embedding = None
-        metadata = None
-
-        # Include document if requested
-        if (include_fields.get("documents") or include_fields.get("document")) and "document" in row:
-            document = row["document"]
-
-        # Include metadata if requested
-        if (include_fields.get("metadatas") or include_fields.get("metadata")) and row.get("metadata") is not None:
-            metadata = self._parse_row_value(row["metadata"])
-
-        # Include embedding if requested
-        if (include_fields.get("embeddings") or include_fields.get("embedding")) and row.get("embedding") is not None:
-            embedding = self._parse_row_value(row["embedding"])
-
-        return {
-            "id": record_id,
-            "document": document,
-            "embedding": embedding,
-            "metadata": metadata,
-        }
-
-    def _use_context_manager_for_cursor(self) -> bool:
-        """
-        Whether to use context manager for cursor
-
-        Returns:
-            True if context manager should be used, False otherwise
-        """
-        # Default implementation: use context manager
-        # Subclasses can override this if they need different behavior
-        return True
-
-    def _should_fetch_results(self, cursor: Any, sql: str) -> bool:
-        """Return whether the given SQL statement is expected to yield result rows."""
-        description = getattr(cursor, "description", None)
-        if description is not None:
-            return True
-        return is_query_sql(sql)
-
-    def _execute(self, sql: str) -> Any:
-        """Execute a SQL statement against the connection and return any result rows."""
-        if os.environ.get("PYSEEKDB_PRINT_SQL", "").lower() in ("1", "true", "yes"):
-            print(f"[pyseekdb SQL] {sql}", flush=True)
-        conn = self._ensure_connection()
-        use_context_manager = self._use_context_manager_for_cursor()
-
-        try:
-            if use_context_manager:
-                with conn.cursor() as cursor:
-                    cursor.execute(sql)
-                    if self._should_fetch_results(cursor, sql):
-                        return cursor.fetchall()
-                    return None
-
-            cursor = conn.cursor()
-            try:
-                cursor.execute(sql)
-                if self._should_fetch_results(cursor, sql):
-                    return cursor.fetchall()
-                return None
-            finally:
-                cursor.close()
-        except Exception as exc:
-            maybe_reraise_friendly_kernel_error(exc)
-            raise
+        """Normalize one standard collection get-result row."""
+        return _process_get_row_fragment(row, include_fields)
 
     # -------------------- DQL Operations (Common Implementation) --------------------
 
