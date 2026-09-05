@@ -198,6 +198,11 @@ class BackendCapabilitiesMixin:
             self._backend_capabilities = cached
         return cached
 
+    @property
+    def supports_fork_database(self) -> bool:
+        """Return whether the connected backend supports database forking."""
+        return self.backend_capabilities.supports_fork_database
+
 
 __all__ = [
     "NAMESPACE_MIN_LAKEBASE_VERSION",

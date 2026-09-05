@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import os
 
-from .client_seekdb_server import RemoteServerClient
+from .client_base import BaseClient
+from .connection import MySQLConnectionMixin
 from .fork import build_drop_database_sql, execute_database_fork
+from .kernel_errors import namespace_kernel_error_guard
 
 
-class Client(RemoteServerClient):
+class Client(MySQLConnectionMixin, BaseClient):
     """Synchronous client bound to one existing remote database.
 
     ``Client`` manages collections in the database supplied at construction time.
@@ -44,6 +46,26 @@ class Client(RemoteServerClient):
             **kwargs,
         )
 
+    @namespace_kernel_error_guard
+    def _namespace_prewarm(
+        self,
+        collection_id: str | None,
+        collection_name: str,
+        namespace_id: str,
+        namespace_name: str,
+        **kwargs,
+    ) -> None:
+        """Prewarm the namespace logical table to reduce first-query latency."""
+        ltable_id = self._resolve_namespace_ltable_id(collection_id, namespace_id)
+        self._use_catalog_database()
+        self._set_session_ns_context(
+            collection_id=collection_id,
+            namespace_id=int(namespace_id),
+            ltable_id=ltable_id,
+        )
+        sql = f"CALL DBMS_LOGIC_TABLE.PREWARM('{collection_id}', {namespace_id})"
+        self._execute(sql)
+
     def fork_database(self, destination_name: str) -> Client:
         """Fork this client's database and return a client bound to the copy.
 
@@ -77,6 +99,11 @@ class Client(RemoteServerClient):
         self.close()
         parent._execute(build_drop_database_sql(self.database))
         self._fork_parent = None
+
+    def __repr__(self) -> str:
+        """Return the developer-readable representation."""
+        status = "connected" if self.is_connected() else "disconnected"
+        return f"<{type(self).__name__} {self.full_user}@{self.host}:{self.port}/{self.database} status={status}>"
 
 
 __all__ = ["Client"]

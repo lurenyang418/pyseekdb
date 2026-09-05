@@ -8,10 +8,19 @@ import json
 import logging
 import os
 import re
+import uuid
 from typing import Any
 
 from .async_collection import AsyncCollection
 from .capabilities import BackendCapabilities, _first_result_value, parse_backend_identity
+from .collection_lifecycle import (
+    COLLECTION_CREATION_TOKEN_KEY,
+    COLLECTION_STATE_CREATING,
+    COLLECTION_STATE_FAILED,
+    COLLECTION_STATE_READY,
+    collection_state,
+    parse_collection_settings,
+)
 from .configuration import (
     DEFAULT_DISTANCE_METRIC,
     DEFAULT_VECTOR_DIMENSION,
@@ -27,19 +36,24 @@ from .query_builder import (
     build_select_clause,
     build_vector_index_sql,
     build_where_clause,
-    convert_id_from_bytes,
     embed_texts,
     embedding_to_hexstring,
+    normalize_collection_batch,
     normalize_include_fields,
     normalize_query_embeddings,
-    parse_row_value,
     process_get_row,
     process_query_row,
 )
 from .schema import Schema
 from .sql_utils import _query_hint_to_sql, is_query_sql
 from .types import _NOT_PROVIDED, K
-from .validators import _quote_sql_identifier, _validate_collection_name, _validate_database_name, _validate_include
+from .validators import (
+    _quote_sql_identifier,
+    _validate_collection_name,
+    _validate_database_name,
+    _validate_include,
+    _validate_pagination,
+)
 
 try:
     import aiomysql
@@ -47,6 +61,9 @@ except ImportError:  # pragma: no cover - exercised when the optional extra is a
     aiomysql = None
 
 logger = logging.getLogger(__name__)
+
+_COLLECTION_READY_TIMEOUT_SECONDS = 30.0
+_COLLECTION_READY_POLL_INTERVAL_SECONDS = 0.05
 
 
 class AsyncClient:
@@ -144,6 +161,28 @@ class AsyncClient:
             maybe_reraise_friendly_kernel_error(exc)
             raise
 
+    async def _execute_transaction(self, statements: list[tuple[str, list[Any] | tuple[Any, ...]]]) -> None:
+        """Execute a group of DML statements atomically on one pooled connection."""
+        if not statements:
+            raise ValueError("A transaction requires at least one statement")
+
+        pool = await self._ensure_pool()
+        try:
+            async with pool.acquire() as connection:
+                try:
+                    await connection.begin()
+                    async with connection.cursor() as cursor:
+                        for sql, params in statements:
+                            await cursor.execute(sql, tuple(params))
+                    await connection.commit()
+                except BaseException:
+                    with contextlib.suppress(BaseException):
+                        await connection.rollback()
+                    raise
+        except Exception as exc:
+            maybe_reraise_friendly_kernel_error(exc)
+            raise
+
     async def ping(self) -> bool:
         """Check whether the remote server responds."""
         rows = await self._execute("SELECT 1 AS pyseekdb_ping")
@@ -226,11 +265,47 @@ class AsyncClient:
         row = rows[0]
         return str(row.get("collection_id") or row.get("COLLECTION_ID") or row[0])
 
+    async def _get_collection_catalog_row(self, name: str, *, ensure_catalog: bool = True) -> dict[str, Any] | None:
+        """Fetch one collection catalog row by its validated name."""
+        if ensure_catalog:
+            await self._create_catalog_if_not_exists()
+        rows = await self._execute(
+            "SELECT collection_id, collection_name, settings FROM `sdk_collections` WHERE collection_name = %s LIMIT 1",
+            [name],
+        )
+        return rows[0] if rows else None
+
+    @classmethod
+    def _collection_state(cls, row: dict[str, Any]) -> str:
+        """Read the persisted lifecycle state, treating pre-state rows as ready."""
+        return collection_state(row.get("settings") or row.get("SETTINGS"))
+
+    async def _wait_for_collection_ready(self, name: str) -> dict[str, Any]:
+        """Wait for a concurrent asynchronous collection create to finish."""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + _COLLECTION_READY_TIMEOUT_SECONDS
+        ensure_catalog = True
+        while True:
+            row = await self._get_collection_catalog_row(name, ensure_catalog=ensure_catalog)
+            ensure_catalog = False
+            if row is None:
+                raise ValueError(f"Collection not found: '{name}'")
+            state = self._collection_state(row)
+            if state == COLLECTION_STATE_READY:
+                return row
+            if state == COLLECTION_STATE_FAILED:
+                raise ValueError(f"Collection '{name}' is in a failed creation state; retry creation")
+            if state != COLLECTION_STATE_CREATING:
+                raise ValueError(f"Collection '{name}' has unknown lifecycle state '{state}'")
+            if loop.time() >= deadline:
+                raise ValueError(
+                    f"Collection '{name}' is still being created after {_COLLECTION_READY_TIMEOUT_SECONDS:g} seconds"
+                )
+            await asyncio.sleep(_COLLECTION_READY_POLL_INTERVAL_SECONDS)
+
     @staticmethod
     def _parse_settings(value: Any) -> dict[str, Any]:
-        if isinstance(value, str):
-            return json.loads(value) if value else {}
-        return value or {}
+        return parse_collection_settings(value)
 
     async def _describe_dimension(self, table_name: str) -> int:
         """Read a vector dimension from an existing physical collection table."""
@@ -243,6 +318,28 @@ class AsyncClient:
                 if match:
                     return int(match.group(1))
         return DEFAULT_VECTOR_DIMENSION
+
+    async def _describe_distance(self, table_name: str) -> str | None:
+        """Read a vector distance metric from an existing collection table."""
+        rows = await self._execute(f"SHOW CREATE TABLE {_quote_sql_identifier(table_name)}")
+        if not rows:
+            return None
+        row = rows[0]
+        if isinstance(row, dict):
+            create_stmt = row.get("Create Table") or row.get("create table") or ""
+        elif isinstance(row, (tuple, list)):
+            create_stmt = row[1] if len(row) > 1 else ""
+        else:
+            create_stmt = str(row)
+        match = re.search(r"with\s*\([^)]*distance\s*=\s*(['\"]?)(\w+)\1", str(create_stmt), re.IGNORECASE)
+        if not match:
+            return None
+        distance = match.group(2).lower()
+        return (
+            {"ip": "inner_product"}.get(distance, distance)
+            if distance in {"ip", "l2", "cosine", "inner_product"}
+            else None
+        )
 
     async def _collection_from_row(self, row: dict[str, Any]) -> AsyncCollection:
         name = row.get("collection_name") or row.get("COLLECTION_NAME")
@@ -260,19 +357,24 @@ class AsyncClient:
         dimension = settings.get("dimension") or await self._describe_dimension(
             CollectionNames.table_name(collection_id)
         )
+        distance = settings.get("distance")
+        if distance is None:
+            distance = await self._describe_distance(CollectionNames.table_name(collection_id))
         embedding_function = None
         ef_info = settings.get("embedding_function")
         if ef_info:
             ef_class = EmbeddingFunctionRegistry.get_class(ef_info["name"])
             if ef_class is not None:
                 embedding_function = ef_class.build_from_config(ef_info.get("properties", {}))
+        has_sparse_vector_index = "sparse_vector_index" in settings and settings["sparse_vector_index"] is not None
         return AsyncCollection(
             client=self,
             name=name,
             collection_id=collection_id,
             dimension=dimension,
             embedding_function=embedding_function,
-            distance=settings.get("distance", DEFAULT_DISTANCE_METRIC),
+            distance=distance or DEFAULT_DISTANCE_METRIC,
+            has_sparse_vector_index=has_sparse_vector_index,
         )
 
     async def create_collection(
@@ -326,32 +428,64 @@ class AsyncClient:
             "version": 2,
             "dimension": hnsw_config.dimension,
             "distance": hnsw_config.distance,
+            "state": COLLECTION_STATE_CREATING,
+            "creation_token": uuid.uuid4().hex,
         }
         if embedding_function is not None and EmbeddingFunction.support_persistence(embedding_function):
             settings["embedding_function"] = {
                 "name": embedding_function.name(),
                 "properties": embedding_function.get_config(),
             }
-        await self._execute(
-            "INSERT INTO `sdk_collections` (collection_name, settings) VALUES (%s, %s)",
-            [name, json.dumps(settings, ensure_ascii=False)],
-        )
-        collection_id = await self._get_collection_id(name)
-        table_name = CollectionNames.table_name(collection_id)
-        fulltext_sql = build_fulltext_index_sql(schema.fulltext_index)
-        sql = f"""CREATE TABLE IF NOT EXISTS {_quote_sql_identifier(table_name)} (
-            _id varbinary(512) PRIMARY KEY NOT NULL,
-            document string,
-            embedding vector({hnsw_config.dimension}),
-            metadata json,
-            FULLTEXT INDEX idx_fts(document) {fulltext_sql},
-            VECTOR INDEX idx_vec (embedding) {build_vector_index_sql(hnsw_config)}
-        ) ORGANIZATION = HEAP;"""
+        collection_id: str | None = None
+        insert_attempted = False
         try:
+            insert_attempted = True
+            await self._execute(
+                "INSERT INTO `sdk_collections` (collection_name, settings) VALUES (%s, %s)",
+                [name, json.dumps(settings, ensure_ascii=False)],
+            )
+            collection_id = await self._get_collection_id(name)
+            table_name = CollectionNames.table_name(collection_id)
+            fulltext_sql = build_fulltext_index_sql(schema.fulltext_index)
+            sql = f"""CREATE TABLE IF NOT EXISTS {_quote_sql_identifier(table_name)} (
+                _id varbinary(512) PRIMARY KEY NOT NULL,
+                document string,
+                embedding vector({hnsw_config.dimension}),
+                metadata json,
+                FULLTEXT INDEX idx_fts(document) {fulltext_sql},
+                VECTOR INDEX idx_vec (embedding) {build_vector_index_sql(hnsw_config)}
+            ) ORGANIZATION = HEAP;"""
             await self._execute(sql)
-        except Exception:
-            with contextlib.suppress(Exception):
-                await self._execute("DELETE FROM `sdk_collections` WHERE collection_name = %s", [name])
+            ready_settings = dict(settings)
+            ready_settings["state"] = COLLECTION_STATE_READY
+            ready_settings.pop(COLLECTION_CREATION_TOKEN_KEY, None)
+            await self._execute(
+                "UPDATE `sdk_collections` SET settings = %s WHERE collection_name = %s AND collection_id = %s "
+                "AND JSON_UNQUOTE(JSON_EXTRACT(settings, '$.creation_token')) = %s "
+                "AND JSON_UNQUOTE(JSON_EXTRACT(settings, '$.state')) = %s",
+                [
+                    json.dumps(ready_settings, ensure_ascii=False),
+                    name,
+                    collection_id,
+                    settings[COLLECTION_CREATION_TOKEN_KEY],
+                    COLLECTION_STATE_CREATING,
+                ],
+            )
+            published = await self._get_collection_catalog_row(name, ensure_catalog=False)
+            if (
+                published is None
+                or str(published.get("collection_id") or published.get("COLLECTION_ID")) != str(collection_id)
+                or self._collection_state(published) != COLLECTION_STATE_READY
+            ):
+                raise RuntimeError(  # noqa: TRY301
+                    f"Collection '{name}' creation ownership was lost before it became ready"
+                )
+        except BaseException:
+            if insert_attempted:
+                with contextlib.suppress(BaseException):
+                    await asyncio.shield(
+                        self._cleanup_failed_collection(name, collection_id, settings["creation_token"])
+                    )
             raise
         return AsyncCollection(
             client=self,
@@ -361,6 +495,58 @@ class AsyncClient:
             embedding_function=embedding_function,
             distance=hnsw_config.distance,
         )
+
+    async def _cleanup_failed_collection(self, name: str, collection_id: str | None, creation_token: str) -> bool:
+        """Best-effort cleanup of resources owned by a failed async create."""
+        row = await self._get_collection_catalog_row(name, ensure_catalog=False)
+        if row is None:
+            return True
+        settings = self._parse_settings(row.get("settings") or row.get("SETTINGS"))
+        if settings.get(COLLECTION_CREATION_TOKEN_KEY) != creation_token:
+            return False
+        row_collection_id = str(row.get("collection_id") or row.get("COLLECTION_ID") or "")
+        if collection_id is not None and row_collection_id and str(collection_id) != row_collection_id:
+            return False
+        collection_id = row_collection_id or collection_id
+        if collection_id:
+            table_name = CollectionNames.table_name(collection_id)
+            try:
+                await asyncio.shield(self._execute(f"DROP TABLE IF EXISTS {_quote_sql_identifier(table_name)}"))
+            except BaseException:
+                logger.warning("Failed to drop incomplete collection table '%s'", table_name, exc_info=True)
+                return False
+        delete_sql = (
+            "DELETE FROM `sdk_collections` WHERE collection_name = %s AND collection_id = %s "
+            "AND JSON_UNQUOTE(JSON_EXTRACT(settings, '$.creation_token')) = %s"
+        )
+        try:
+            await asyncio.shield(self._execute(delete_sql, [name, collection_id, creation_token]))
+        except BaseException:
+            logger.warning("Failed to delete incomplete collection catalog row '%s'", name, exc_info=True)
+            return False
+        return True
+
+    async def cleanup_incomplete_collection(self, name: str) -> None:
+        """Explicitly remove a stale or failed collection creation.
+
+        Callers must first ensure that no live creator is still building the
+        collection.  A timeout alone is not sufficient evidence that the
+        creator has stopped, so this method is never called automatically.
+        """
+        _validate_collection_name(name)
+        row = await self._get_collection_catalog_row(name)
+        if row is None:
+            raise ValueError(f"Collection '{name}' does not exist")
+        settings = self._parse_settings(row.get("settings") or row.get("SETTINGS"))
+        state = collection_state(settings)
+        if state not in {COLLECTION_STATE_CREATING, COLLECTION_STATE_FAILED}:
+            raise ValueError(f"Collection '{name}' is not an incomplete creation")
+        creation_token = settings.get(COLLECTION_CREATION_TOKEN_KEY)
+        if not creation_token:
+            raise ValueError(f"Collection '{name}' has no verifiable creation owner; clean it up with DBA tooling")
+        collection_id = str(row.get("collection_id") or row.get("COLLECTION_ID") or "") or None
+        if not await self._cleanup_failed_collection(name, collection_id, creation_token):
+            raise RuntimeError(f"Failed to clean up incomplete collection '{name}'")
 
     @staticmethod
     def _embedding_dimension(embedding_function: EmbeddingFunction) -> int:
@@ -374,14 +560,8 @@ class AsyncClient:
     async def get_collection(self, name: str, embedding_function: Any = _NOT_PROVIDED) -> AsyncCollection:
         """Get an existing collection asynchronously."""
         _validate_collection_name(name)
-        await self._create_catalog_if_not_exists()
-        rows = await self._execute(
-            "SELECT collection_id, collection_name, settings FROM `sdk_collections` WHERE collection_name = %s",
-            [name],
-        )
-        if not rows:
-            raise ValueError(f"Collection not found: '{name}'")
-        collection = await self._collection_from_row(rows[0])
+        row = await self._wait_for_collection_ready(name)
+        collection = await self._collection_from_row(row)
         if embedding_function is not _NOT_PROVIDED:
             collection._embedding_function = embedding_function
         return collection
@@ -389,15 +569,18 @@ class AsyncClient:
     async def has_collection(self, name: str) -> bool:
         """Return whether a collection exists in the bound database."""
         _validate_collection_name(name)
-        await self._create_catalog_if_not_exists()
-        rows = await self._execute("SELECT 1 FROM `sdk_collections` WHERE collection_name = %s LIMIT 1", [name])
-        return bool(rows)
+        row = await self._get_collection_catalog_row(name)
+        return row is not None and self._collection_state(row) == COLLECTION_STATE_READY
 
     async def list_collections(self) -> list[AsyncCollection]:
         """List standard and namespace collection handles."""
         await self._create_catalog_if_not_exists()
         rows = await self._execute("SELECT collection_id, collection_name, settings FROM `sdk_collections`")
-        return [await self._collection_from_row(row) for row in rows]
+        return [
+            await self._collection_from_row(row)
+            for row in rows
+            if self._collection_state(row) == COLLECTION_STATE_READY
+        ]
 
     async def get_or_create_collection(
         self,
@@ -406,17 +589,31 @@ class AsyncClient:
         use_namespace: bool = False,
     ) -> AsyncCollection:
         """Get a collection or create it if absent."""
+        _validate_collection_name(name)
+        embedding_function = schema.vector_index.embedding_function if schema is not None else _NOT_PROVIDED
         if await self.has_collection(name):
-            return await self.get_collection(name)
+            return await self.get_collection(name, embedding_function=embedding_function)
         try:
             return await self.create_collection(name, schema=schema, use_namespace=use_namespace)
         except Exception as exc:
             if "already exists" in str(exc).lower() or "duplicate" in str(exc).lower():
-                return await self.get_collection(name)
+                try:
+                    return await self.get_collection(name, embedding_function=embedding_function)
+                except ValueError as recovery_exc:
+                    if str(recovery_exc).startswith("Collection not found:"):
+                        return await self.create_collection(name, schema=schema, use_namespace=use_namespace)
+                    raise
             raise
 
     async def delete_collection(self, name: str) -> None:
         """Delete a standard collection and its SDK metadata."""
+        _validate_collection_name(name)
+        row = await self._get_collection_catalog_row(name)
+        if row is not None and self._collection_state(row) in {COLLECTION_STATE_CREATING, COLLECTION_STATE_FAILED}:
+            raise ValueError(
+                f"Collection '{name}' is incomplete; call cleanup_incomplete_collection() "
+                "after confirming the creator has stopped"
+            )
         collection = await self.get_collection(name)
         if collection.use_namespace:
             raise NotImplementedError("Async namespace collection deletion is not implemented yet")
@@ -430,32 +627,6 @@ class AsyncClient:
         value = rows[0].get("count", rows[0].get("COUNT(*)"))
         return int(value)
 
-    @staticmethod
-    def _normalize_batch(
-        ids: str | list[str],
-        embeddings: list[float] | list[list[float]] | None,
-        metadatas: dict | list[dict] | None,
-        documents: str | list[str] | None,
-    ) -> tuple[list[str], list[list[float]] | None, list[dict] | None, list[str] | None]:
-        id_list = [ids] if isinstance(ids, str) else list(ids)
-        if not id_list:
-            raise ValueError("ids must not be empty")
-        document_list = [documents] if isinstance(documents, str) else documents
-        metadata_list = [metadatas] if isinstance(metadatas, dict) else metadatas
-        embedding_list = embeddings
-        if embedding_list is not None and (not embedding_list or not isinstance(embedding_list[0], list)):
-            embedding_list = [embedding_list]  # type: ignore[list-item]
-        for label, values in (
-            ("documents", document_list),
-            ("metadatas", metadata_list),
-            ("embeddings", embedding_list),
-        ):
-            if values is not None and len(values) != len(id_list):
-                raise ValueError(f"Number of {label} ({len(values)}) does not match number of ids ({len(id_list)})")
-        if embedding_list is None and document_list is None and metadata_list is None:
-            raise ValueError("Provide embeddings, documents, or metadatas")
-        return id_list, embedding_list, metadata_list, document_list
-
     async def _collection_add(
         self,
         collection: AsyncCollection,
@@ -465,8 +636,8 @@ class AsyncClient:
         documents: str | list[str] | None,
         **kwargs: Any,
     ) -> None:
-        id_list, embedding_list, metadata_list, document_list = self._normalize_batch(
-            ids, embeddings, metadatas, documents
+        id_list, embedding_list, metadata_list, document_list = normalize_collection_batch(
+            ids, embeddings, metadatas, documents, require_values=True
         )
         if embedding_list is None and document_list is not None:
             embedding_list = (
@@ -477,16 +648,18 @@ class AsyncClient:
         if embedding_list is None and document_list is None:
             raise ValueError("Add requires embeddings or documents")
         table = _quote_sql_identifier(CollectionNames.table_name(collection.id))
+        statements: list[tuple[str, list[Any]]] = []
         for index, record_id in enumerate(id_list):
             vector_sql = "NULL" if embedding_list is None else embedding_to_hexstring(embedding_list[index])
-            await self._execute(
+            statements.append((
                 f"INSERT INTO {table} (_id, document, embedding, metadata) VALUES (CAST(%s AS BINARY), %s, {vector_sql}, %s)",
                 [
                     record_id,
-                    document_list[index] if document_list else None,
-                    json.dumps(metadata_list[index], ensure_ascii=False) if metadata_list else None,
+                    document_list[index] if document_list is not None else None,
+                    json.dumps(metadata_list[index], ensure_ascii=False) if metadata_list is not None else None,
                 ],
-            )
+            ))
+        await self._execute_transaction(statements)
 
     async def _collection_update(
         self,
@@ -497,8 +670,8 @@ class AsyncClient:
         documents: str | list[str] | None,
         **kwargs: Any,
     ) -> None:
-        id_list, embedding_list, metadata_list, document_list = self._normalize_batch(
-            ids, embeddings, metadatas, documents
+        id_list, embedding_list, metadata_list, document_list = normalize_collection_batch(
+            ids, embeddings, metadatas, documents, require_values=True
         )
         if embedding_list is None and document_list is not None:
             embedding_list = (
@@ -507,6 +680,7 @@ class AsyncClient:
             if embedding_list is None:
                 raise ValueError("Documents require an embedding function")
         table = _quote_sql_identifier(CollectionNames.table_name(collection.id))
+        statements: list[tuple[str, list[Any]]] = []
         for index, record_id in enumerate(id_list):
             assignments: list[str] = []
             params: list[Any] = []
@@ -518,26 +692,49 @@ class AsyncClient:
             if metadata_list is not None:
                 assignments.append("metadata = %s")
                 params.append(json.dumps(metadata_list[index], ensure_ascii=False))
-            await self._execute(
+            statements.append((
                 f"UPDATE {table} SET {', '.join(assignments)} WHERE _id = CAST(%s AS BINARY)",
                 [*params, record_id],
-            )
+            ))
+        await self._execute_transaction(statements)
 
     async def _collection_upsert(self, collection: AsyncCollection, **kwargs: Any) -> None:
-        ids, embeddings, metadatas, documents = self._normalize_batch(
-            kwargs.pop("ids"), kwargs.pop("embeddings"), kwargs.pop("metadatas"), kwargs.pop("documents")
+        ids, embeddings, metadatas, documents = normalize_collection_batch(
+            kwargs.pop("ids"),
+            kwargs.pop("embeddings"),
+            kwargs.pop("metadatas"),
+            kwargs.pop("documents"),
+            require_values=True,
         )
+        if embeddings is None and documents is not None:
+            if collection.embedding_function is None:
+                raise ValueError("Documents require an embedding function")
+            embeddings = list(collection.embedding_function(documents))
+
+        table = _quote_sql_identifier(CollectionNames.table_name(collection.id))
+        statements: list[tuple[str, list[Any]]] = []
         for index, record_id in enumerate(ids):
-            exists = await self._collection_get(collection, ids=record_id, include=[])
-            operation = self._collection_update if exists["ids"] else self._collection_add
-            await operation(
-                collection,
-                ids=record_id,
-                embeddings=embeddings[index] if embeddings else None,
-                metadatas=metadatas[index] if metadatas else None,
-                documents=documents[index] if documents else None,
-                **kwargs,
-            )
+            embedding_sql = "NULL" if embeddings is None else embedding_to_hexstring(embeddings[index])
+            update_clauses: list[str] = []
+            if documents is not None:
+                update_clauses.append("document = VALUES(document)")
+            if embeddings is not None:
+                update_clauses.append("embedding = VALUES(embedding)")
+            if metadatas is not None:
+                update_clauses.append("metadata = VALUES(metadata)")
+            if not update_clauses:
+                update_clauses.append("_id = _id")
+            statements.append((
+                f"INSERT INTO {table} (_id, document, embedding, metadata) "
+                f"VALUES (CAST(%s AS BINARY), %s, {embedding_sql}, %s) "
+                f"ON DUPLICATE KEY UPDATE {', '.join(update_clauses)}",
+                [
+                    record_id,
+                    documents[index] if documents is not None else None,
+                    json.dumps(metadatas[index], ensure_ascii=False) if metadatas is not None else None,
+                ],
+            ))
+        await self._execute_transaction(statements)
 
     def _build_where(
         self,
@@ -553,6 +750,8 @@ class AsyncClient:
         ids = kwargs.pop("ids")
         where = kwargs.pop("where")
         where_document = kwargs.pop("where_document")
+        if ids is not None and not ids:
+            raise ValueError("ids must not be empty")
         if ids is None and not where and not where_document:
             raise ValueError("At least one of ids, where, or where_document must be provided")
         where_sql, params = self._build_where(ids, where, where_document)
@@ -572,6 +771,7 @@ class AsyncClient:
         where_document = kwargs.pop("where_document")
         limit_value = kwargs.pop("limit")
         offset_value = kwargs.pop("offset")
+        _validate_pagination(limit_value, offset_value)
         limit = 100 if limit_value is None else limit_value
         offset = 0 if offset_value is None else offset_value
         include = kwargs.pop("include")
@@ -603,14 +803,6 @@ class AsyncClient:
             if "embeddings" in result:
                 result["embeddings"].append(processed["embedding"])
         return result
-
-    @staticmethod
-    def _decode_id(value: Any) -> str:
-        return convert_id_from_bytes(value) or ""
-
-    @staticmethod
-    def _parse_value(value: Any) -> Any:
-        return parse_row_value(value)
 
     async def _collection_query(self, collection: AsyncCollection, **kwargs: Any) -> dict[str, Any]:
         query_embeddings = kwargs.pop("query_embeddings")
@@ -699,20 +891,52 @@ class AsyncClient:
             "SELECT settings FROM `sdk_collections` WHERE collection_name = %s",
             [collection.name],
         )
-        settings = rows[0].get("settings") if rows else "{}"
-        await self._execute(
-            "INSERT INTO `sdk_collections` (collection_name, settings) VALUES (%s, %s)",
-            [forked_name, settings],
-        )
-        forked_id = await self._get_collection_id(forked_name)
+        source_settings = self._parse_settings((rows[0].get("settings") or rows[0].get("SETTINGS")) if rows else {})
+        creation_token = uuid.uuid4().hex
+        settings = dict(source_settings)
+        settings["state"] = COLLECTION_STATE_CREATING
+        settings[COLLECTION_CREATION_TOKEN_KEY] = creation_token
+        forked_id: str | None = None
+        insert_attempted = False
         try:
+            insert_attempted = True
+            await self._execute(
+                "INSERT INTO `sdk_collections` (collection_name, settings) VALUES (%s, %s)",
+                [forked_name, json.dumps(settings, ensure_ascii=False)],
+            )
+            forked_id = await self._get_collection_id(forked_name)
             await self._execute(
                 f"FORK TABLE {_quote_sql_identifier(CollectionNames.table_name(collection.id))} "
                 f"TO {_quote_sql_identifier(CollectionNames.table_name(forked_id))}"
             )
-        except Exception:
-            with contextlib.suppress(Exception):
-                await self._execute("DELETE FROM `sdk_collections` WHERE collection_name = %s", [forked_name])
+            ready_settings = dict(settings)
+            ready_settings["state"] = COLLECTION_STATE_READY
+            ready_settings.pop(COLLECTION_CREATION_TOKEN_KEY, None)
+            await self._execute(
+                "UPDATE `sdk_collections` SET settings = %s WHERE collection_name = %s AND collection_id = %s "
+                "AND JSON_UNQUOTE(JSON_EXTRACT(settings, '$.creation_token')) = %s "
+                "AND JSON_UNQUOTE(JSON_EXTRACT(settings, '$.state')) = %s",
+                [
+                    json.dumps(ready_settings, ensure_ascii=False),
+                    forked_name,
+                    forked_id,
+                    creation_token,
+                    COLLECTION_STATE_CREATING,
+                ],
+            )
+            published = await self._get_collection_catalog_row(forked_name, ensure_catalog=False)
+            if (
+                published is None
+                or str(published.get("collection_id") or published.get("COLLECTION_ID")) != str(forked_id)
+                or self._collection_state(published) != COLLECTION_STATE_READY
+            ):
+                raise RuntimeError(  # noqa: TRY301
+                    f"Collection '{forked_name}' creation ownership was lost before it became ready"
+                )
+        except BaseException:
+            if insert_attempted:
+                with contextlib.suppress(BaseException):
+                    await asyncio.shield(self._cleanup_failed_collection(forked_name, forked_id, creation_token))
             raise
         return await self.get_collection(forked_name, embedding_function=collection.embedding_function)
 

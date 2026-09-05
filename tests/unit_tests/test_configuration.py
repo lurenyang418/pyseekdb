@@ -2,6 +2,7 @@
 Unit tests for configuration classes
 """
 
+import json
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -21,8 +22,8 @@ from pyseekdb import (  # noqa: E402
     Schema,
     SpaceProperties,
 )
+from pyseekdb.client.client import Client  # noqa: E402
 from pyseekdb.client.client_base import BaseClient  # noqa: E402
-from pyseekdb.client.client_seekdb_server import RemoteServerClient  # noqa: E402
 from pyseekdb.client.configuration import IVFConfiguration, VectorIndexConfig  # noqa: E402
 from pyseekdb.client.embedding_function import EmbeddingFunction  # noqa: E402
 from pyseekdb.client.query_builder import build_vector_index_sql as _get_vector_index_sql  # noqa: E402
@@ -302,7 +303,7 @@ class TestVectorIndexConfigEmbeddingRequired:
             VectorIndexConfig(ivf=ivf)
 
     def test_remote_client_ping_executes_healthcheck_query(self):
-        client = RemoteServerClient.__new__(RemoteServerClient)
+        client = Client.__new__(Client)
         client._execute = MagicMock(return_value=[{"pyseekdb_ping": 1}])
 
         assert client.ping()
@@ -321,6 +322,30 @@ class TestVectorIndexConfigEmbeddingRequired:
         assert collection.dimension == 384
         create_sql = client._execute.call_args.args[0]
         assert "embedding vector(384)" in create_sql
+
+    def test_standard_collection_rejects_ivf_configuration(self):
+        """IVF must not be silently replaced with the default HNSW index."""
+        client = MagicMock(spec=BaseClient)
+        client.has_collection.return_value = False
+        schema = Schema(vector_index=IVFConfiguration(dimension=3, distance="l2"))
+
+        with pytest.raises(ValueError, match="support HNSW vector indexes only"):
+            BaseClient.create_collection(client, "items", schema=schema)
+
+        client._create_collection_meta.assert_not_called()
+
+    def test_standard_collection_metadata_persists_distance_and_dimension(self):
+        """Reopening through another client must have the original vector settings."""
+        client = MagicMock(spec=BaseClient)
+        client._get_collection_id.side_effect = [ValueError("not found"), "collection-id"]
+        client._execute.return_value = []
+
+        BaseClient._create_collection_meta(client, "items", None, dimension=3, distance="l2")
+
+        insert_call = next(call for call in client._execute.call_args_list if "INSERT INTO" in call.args[0])
+        settings = json.loads(insert_call.args[1][1])
+        assert settings["dimension"] == 3
+        assert settings["distance"] == "l2"
 
     def test_missing_persisted_ef_is_optional_when_reopening(self):
         client = MagicMock(spec=BaseClient)

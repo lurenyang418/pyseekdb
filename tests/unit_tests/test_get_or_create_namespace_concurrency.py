@@ -12,8 +12,8 @@ project_root = Path(__file__).parent.parent.parent
 src_root = project_root / "src"
 sys.path.insert(0, str(src_root))
 
-from pyseekdb.client.client_base import (  # noqa: E402
-    BaseClient,
+from pyseekdb.client.client_base import BaseClient  # noqa: E402
+from pyseekdb.client.collection_catalog import (  # noqa: E402
     _is_namespace_catalog_conflict_error,
 )
 

@@ -9,6 +9,7 @@ _MAX_NAMESPACE_NAME_LENGTH = 256
 _MAX_NAMESPACE_BATCH_SIZE = 100
 _MAX_N_RESULTS = 16384  # OceanBase vector-search k upper bound
 _VALID_INCLUDE_FIELDS = frozenset({
+    "ids",
     "documents",
     "document",
     "metadatas",
@@ -28,7 +29,7 @@ def _validate_include(include: list[str] | None) -> None:
         raise TypeError(f"include must be a list[str] or None, got {type(include).__name__}")
     invalid = [field for field in include if field not in _VALID_INCLUDE_FIELDS]
     if invalid:
-        allowed = "documents, metadatas, embeddings, distances"
+        allowed = "ids, documents, metadatas, embeddings, distances"
         raise ValueError(
             f"Invalid include field(s): {invalid!r}. "
             f"Allowed values: {allowed} "
@@ -99,6 +100,15 @@ def _validate_n_results(n_results: int, *, max_results: int = _MAX_N_RESULTS) ->
         raise ValueError(
             f"n_results must be <= {max_results}, got {n_results}. Use a smaller value or paginate with offset/limit."
         )
+
+
+def _validate_pagination(limit: int | None, offset: int | None) -> None:
+    """Validate optional SQL pagination values before they reach the backend."""
+    for name, value in (("limit", limit), ("offset", offset)):
+        if value is None:
+            continue
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError(f"{name} must be an integer >= 0 or None, got {value!r}")
 
 
 def _validate_record_ids(ids: list[str]) -> None:

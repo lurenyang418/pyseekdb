@@ -20,6 +20,10 @@ sys.path.insert(0, str(src_root))
 from namespace_test_support import maybe_skip_namespace_integration_test  # noqa: E402
 
 import pyseekdb  # noqa: E402
+from pyseekdb.client.embedding_function import EmbeddingFunctionRegistry  # noqa: E402
+from tests.stubs import StubEmbeddingFunction  # noqa: E402
+
+EmbeddingFunctionRegistry.register(StubEmbeddingFunction)
 
 # ==================== Environment Variable Configuration ====================
 # Server mode (seekdb Server)

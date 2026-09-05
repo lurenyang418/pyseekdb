@@ -2,6 +2,7 @@
 Unit tests for concurrent-safe get_or_create_collection helpers.
 """
 
+import json
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -12,8 +13,8 @@ project_root = Path(__file__).parent.parent.parent
 src_root = project_root / "src"
 sys.path.insert(0, str(src_root))
 
-from pyseekdb.client.client_base import (  # noqa: E402
-    BaseClient,
+from pyseekdb.client.client_base import BaseClient  # noqa: E402
+from pyseekdb.client.collection_catalog import (  # noqa: E402
     _is_collection_conflict_error,
     _is_sdk_collection_catalog_conflict_error,
 )
@@ -54,7 +55,7 @@ class TestCollectionCatalogInsertRecovery:
 
             pass
 
-        def execute_side_effect(sql):
+        def execute_side_effect(sql, _params=None):
             """Execute side effect."""
             if "INSERT INTO" in sql:
                 raise IntegrityError("(1062, \"Duplicate entry 'items' for key 'uk_sdk_coll_name'\")")
@@ -79,6 +80,47 @@ class TestCollectionCatalogInsertRecovery:
         insert_calls = [call for call in client._execute.call_args_list if "INSERT INTO" in str(call)]
         assert not insert_calls
 
+    def test_sync_create_does_not_reuse_async_creating_catalog_row(self):
+        """A synchronous creator must not steal an asynchronous creator's ID."""
+        client = MagicMock(spec=BaseClient)
+        client._get_collection_id.return_value = "async_id"
+        client._resolve_collection_metadata_from_sdk_collections.return_value = MagicMock(
+            collection_id="async_id",
+            settings='{"state": "creating", "creation_token": "owner-token"}',
+        )
+
+        with pytest.raises(ValueError, match="being created by another client"):
+            BaseClient._create_collection_meta(
+                client,
+                "items",
+                None,
+                lifecycle_state="creating",
+                creation_token="sync-token",  # noqa: S106
+            )
+
+    def test_sync_collection_fork_uses_lifecycle_state(self):
+        """The synchronous facade must publish a fork only after FORK TABLE succeeds."""
+        client = MagicMock(spec=BaseClient)
+        client._fork_table_enabled.return_value = True
+        client.has_collection.return_value = False
+        client._get_collection_table_name.return_value = "c$v2$source_id"
+        client._get_collection_id.return_value = "forked_id"
+        client._resolve_collection_metadata_from_sdk_collections.return_value = MagicMock(
+            collection_id="source_id",
+            settings='{"version": 2, "dimension": 3, "distance": "l2", "state": "ready"}',
+        )
+        source = MagicMock(id="source_id", name="source")
+
+        BaseClient._collection_fork(client, source, "forked")
+
+        insert_call = next(call for call in client._execute.call_args_list if "INSERT INTO" in call.args[0])
+        settings = json.loads(insert_call.args[1][1])
+        assert settings["state"] == "creating"
+        assert "creation_token" in settings
+        fork_call = next(call for call in client._execute.call_args_list if "FORK TABLE" in call.args[0])
+        assert "c$v2$source_id" in fork_call.args[0]
+        client._mark_collection_ready.assert_called_once_with("forked", "forked_id", settings["creation_token"])
+
 
 class TestCollectionConflictDetection:
     """TestCollectionConflictDetection class."""
@@ -101,6 +143,10 @@ class TestCollectionConflictDetection:
     def test_ignores_unrelated_errors(self):
         """Test ignores unrelated errors."""
         assert not _is_collection_conflict_error(ValueError("invalid dimension"))
+
+    def test_ignores_unrelated_already_exists_message(self):
+        """Test does not classify an unrelated already-exists message as a collection conflict."""
+        assert not _is_collection_conflict_error(ValueError("metadata table reference already exists"))
 
     def test_ignores_metadata_failure_without_conflict_cause(self):
         """Test ignores metadata failure without conflict cause."""
@@ -156,6 +202,40 @@ class TestGetOrCreateCollectionRecovery:
 
         assert result is existing
         client.get_collection.assert_called_once_with("items", embedding_function=_NOT_PROVIDED)
+
+    def test_waits_for_collection_owned_by_another_creator(self):
+        """A concurrent get_or_create waits instead of treating creating as absent."""
+        client = MagicMock(spec=BaseClient)
+        self._bind_resume_helper(client)
+        existing = object()
+        client.has_collection.return_value = False
+        client.create_collection.side_effect = ValueError(
+            "Collection 'items' is being created by another client; retry after it is ready"
+        )
+        client.get_collection.return_value = existing
+
+        result = BaseClient.get_or_create_collection(client, "items")
+
+        assert result is existing
+        client.get_collection.assert_called_once_with("items", embedding_function=_NOT_PROVIDED)
+
+    def test_resume_helper_waits_when_get_observes_creating_state(self):
+        """The recovery path polls when the catalog is still in creating state."""
+        client = MagicMock(spec=BaseClient)
+        self._bind_resume_helper(client)
+        existing = object()
+        client.get_collection.side_effect = ValueError("Collection 'items' is still being created")
+        client._wait_for_collection_ready = MagicMock(return_value=existing)
+
+        result = BaseClient._get_or_resume_existing_collection(
+            client,
+            "items",
+            schema=None,
+            use_namespace=False,
+        )
+
+        assert result is existing
+        client._wait_for_collection_ready.assert_called_once_with("items", embedding_function=_NOT_PROVIDED)
 
     def test_conflict_on_namespace_collection_resumes_incomplete_handle(self):
         """Test conflict on namespace collection resumes incomplete handle."""

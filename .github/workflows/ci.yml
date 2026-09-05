@@ -162,7 +162,7 @@ jobs:
         if: matrix.test_mode == 'server'
         run: |
           docker run --name seekdb-server -p 2881:2881 -d oceanbase/seekdb:1.3.0.0-100000092026051510
-          for attempt in {1..30}; do
+          for attempt in {1..60}; do
             if (echo > /dev/tcp/127.0.0.1/2881) 2>/dev/null; then
               echo "seekdb server ready after ${attempt} attempt(s)"
               docker logs seekdb-server
@@ -178,7 +178,7 @@ jobs:
           done
 
           docker logs seekdb-server
-          echo "seekdb server did not become ready within 60 seconds" >&2
+          echo "seekdb server did not become ready within 120 seconds" >&2
           exit 1
 
       - name: Run integration tests for ${{ matrix.test_mode }}
@@ -224,7 +224,7 @@ jobs:
         run: |
           set -euo pipefail
           docker run --name seekdb-fork-server -p 2881:2881 -d "${{ matrix.image }}"
-          for attempt in {1..30}; do
+          for attempt in {1..60}; do
             if (echo > /dev/tcp/127.0.0.1/2881) 2>/dev/null; then
               echo "seekdb ${{ matrix.seekdb_version }} ready after ${attempt} attempt(s)"
               docker logs seekdb-fork-server
@@ -240,7 +240,7 @@ jobs:
           done
 
           docker logs seekdb-fork-server
-          echo "seekdb fork test container did not become ready within 60 seconds" >&2
+          echo "seekdb fork test container did not become ready within 120 seconds" >&2
           exit 1
 
       - name: Run sync and async Fork tests

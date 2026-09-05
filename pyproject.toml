@@ -106,6 +106,9 @@ ignore = [
 "tests/**" = ["S101", "S608", "C901", "S105", "S110", "TRY300", "B017"]
 "src/pyseekdb/client/client_base.py" = ["S608", "C901"]
 "src/pyseekdb/client/async_client.py" = ["S608", "C901"]
+"src/pyseekdb/client/collection_operations.py" = ["S608", "C901"]
+"src/pyseekdb/client/namespace_operations.py" = ["S608", "C901"]
+"src/pyseekdb/client/collection_catalog.py" = ["S608", "C901"]
 "src/pyseekdb/client/document_query_builder.py" = ["C901"]
 
 [tool.ruff.format]

@@ -13,6 +13,7 @@ src_root = project_root / "src"
 sys.path.insert(0, str(src_root))
 
 from pyseekdb.client.client_base import BaseClient  # noqa: E402
+from pyseekdb.client.namespace_operations import NamespaceOperationsMixin  # noqa: E402
 
 
 class TestNamespaceUpsertReconcile:
@@ -75,7 +76,7 @@ class TestNamespaceUpsertReconcile:
         client._count_namespace_records_by_id.return_value = 4
 
         with (
-            patch("pyseekdb.client.client_base.time.sleep"),
+            patch("pyseekdb.client.namespace_operations.time.sleep"),
             pytest.raises(ValueError, match="Failed to reconcile duplicate namespace rows"),
         ):
             BaseClient._reconcile_namespace_duplicate_records(
@@ -92,6 +93,33 @@ class TestNamespaceUpsertReconcile:
                 embeddings=None,
                 embedding_function=None,
             )
+
+    def test_upsert_splits_existing_and_missing_ids(self):
+        """Test upsert dispatches each ID to the appropriate operation."""
+        client = NamespaceOperationsMixin()
+        client._resolve_namespace_ltable_id = MagicMock(return_value=9)
+        client._set_session_ns_context = MagicMock()
+        client._execute_query_with_cursor = MagicMock(return_value=[{"rid": '"existing"'}])
+        client._ensure_connection = MagicMock()
+        client._use_context_manager_for_cursor = MagicMock(return_value=False)
+        client._namespace_add = MagicMock()
+        client._namespace_update = MagicMock()
+        client._reconcile_namespace_duplicate_records = MagicMock()
+
+        NamespaceOperationsMixin._namespace_upsert(
+            client,
+            collection_id="c" * 32,
+            collection_name="items",
+            namespace_id="7",
+            namespace_name="race_ns",
+            ids=["new", "existing"],
+            documents=["new doc", "old doc"],
+            metadatas=[{"rank": 1}, {"rank": 2}],
+            embeddings=[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]],
+        )
+
+        assert client._namespace_add.call_args.kwargs["ids"] == ["new"]
+        assert client._namespace_update.call_args.kwargs["ids"] == ["existing"]
 
 
 if __name__ == "__main__":

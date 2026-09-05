@@ -8,6 +8,16 @@ import pyseekdb
 from pyseekdb.client.fork import execute_database_fork
 
 
+@pytest.mark.parametrize("method_name", ["get_collection", "delete_collection"])
+def test_collection_management_rejects_untrusted_names_before_sql(method_name: str) -> None:
+    """Collection management APIs must reject SQL syntax in names at the boundary."""
+    client = pyseekdb.Client.__new__(pyseekdb.Client)
+    malicious_name = "x' OR '1'='1"
+
+    with pytest.raises(ValueError, match="Invalid collection name"):
+        getattr(client, method_name)(malicious_name)
+
+
 def test_client_is_a_concrete_database_bound_client() -> None:
     """The public Client is not a proxy and does not expose database CRUD."""
     client = pyseekdb.Client(host="localhost", database="demo")
@@ -33,7 +43,7 @@ def test_client_fork_returns_client_bound_to_destination() -> None:
         connect_timeout=3,
     )
 
-    with patch("pyseekdb.client.sync_client.execute_database_fork") as execute:
+    with patch("pyseekdb.client.client.execute_database_fork") as execute:
         forked = client.fork_database("destination")
 
     execute.assert_called_once_with(client, "destination")
@@ -53,7 +63,7 @@ def test_only_forked_client_can_destroy_its_database() -> None:
     with pytest.raises(ValueError, match="Only a client returned by fork_database"):
         client.destroy()
 
-    with patch("pyseekdb.client.sync_client.execute_database_fork"):
+    with patch("pyseekdb.client.client.execute_database_fork"):
         forked = client.fork_database("destination")
     client._execute = MagicMock()
 

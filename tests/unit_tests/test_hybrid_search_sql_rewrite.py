@@ -2,7 +2,7 @@
 
 import pytest
 
-from pyseekdb.client.client_base import _unquote_json_extract_expressions
+from pyseekdb.client.collection_operations import _unquote_json_extract_expressions
 
 
 @pytest.mark.parametrize(

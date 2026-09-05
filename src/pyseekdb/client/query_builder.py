@@ -123,7 +123,13 @@ def build_sparse_vector_index_sql(sparse_config: SparseVectorIndexConfig) -> str
 
 
 def embedding_to_hexstring(embedding: list[float]) -> str:
-    """Serialize a dense embedding as a compact SQL hex literal."""
+    """Serialize a dense embedding as a compact SQL hex literal.
+
+    The returned literal is safe to inline: its payload is produced solely by
+    ``struct.pack`` and hexadecimal encoding, never from caller-provided SQL.
+    Keeping the binary literal also preserves OceanBase VECTOR type handling
+    across the synchronous and asynchronous drivers.
+    """
     if not embedding:
         return ""
     binary = struct.pack(f"<{len(embedding)}f", *embedding)
@@ -139,6 +145,38 @@ def normalize_query_embeddings(
     if query_embeddings and isinstance(query_embeddings[0], (int, float)):
         return [query_embeddings]  # type: ignore[list-item]
     return query_embeddings
+
+
+def normalize_collection_batch(
+    ids: str | list[str],
+    embeddings: list[float] | list[list[float]] | None,
+    metadatas: dict | list[dict] | None,
+    documents: str | list[str] | None,
+    *,
+    require_values: bool = False,
+) -> tuple[list[str], list[list[float]] | None, list[dict] | None, list[str] | None]:
+    """Normalize collection DML inputs shared by sync and async clients."""
+    id_list = [ids] if isinstance(ids, str) else list(ids)
+    if not id_list:
+        raise ValueError("ids must not be empty")
+
+    document_list = [documents] if isinstance(documents, str) else documents
+    metadata_list = [metadatas] if isinstance(metadatas, dict) else metadatas
+    embedding_list = embeddings
+    if embedding_list and not isinstance(embedding_list[0], list):
+        embedding_list = [embedding_list]  # type: ignore[list-item]
+
+    for label, values in (
+        ("documents", document_list),
+        ("metadatas", metadata_list),
+        ("embeddings", embedding_list),
+    ):
+        if values is not None and len(values) != len(id_list):
+            raise ValueError(f"Number of {label} ({len(values)}) does not match number of ids ({len(id_list)})")
+
+    if require_values and not embedding_list and not document_list and not metadata_list:
+        raise ValueError("Provide embeddings, documents, or metadatas")
+    return id_list, embedding_list, metadata_list, document_list
 
 
 def normalize_include_fields(include: list[str] | None) -> dict[str, bool]:
@@ -212,6 +250,32 @@ def parse_row_value(value: Any) -> Any:
     return value
 
 
+def parse_embedding_value(value: Any) -> Any:
+    """Decode an embedding returned as JSON text or packed float32 bytes.
+
+    OceanBase vector columns may be returned by a MySQL-compatible driver as
+    the same little-endian float32 bytes used by ``embedding_to_hexstring``.
+    Some drivers instead return a JSON string or an already decoded list.
+    """
+    if not isinstance(value, bytes):
+        return parse_row_value(value)
+
+    if not value:
+        return []
+
+    # Accept drivers that serialize VECTOR values as a UTF-8 JSON payload.
+    try:
+        decoded = json.loads(value.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
+        decoded = None
+    if isinstance(decoded, list):
+        return decoded
+
+    if len(value) % 4 != 0:
+        raise ValueError(f"Invalid packed embedding length: {len(value)} bytes is not divisible by 4")
+    return list(struct.unpack(f"<{len(value) // 4}f", value))
+
+
 def convert_id_to_sql(id_value: str) -> str:
     """Build a safely escaped CAST expression for a binary record ID."""
     if not isinstance(id_value, str):
@@ -245,10 +309,10 @@ def process_query_row(row: dict[str, Any], include_fields: dict[str, bool]) -> d
     if "document" in row and row["document"] is not None:
         result_item["document"] = row["document"]
     if "embedding" in row and row["embedding"] is not None:
-        result_item["embedding"] = parse_row_value(row["embedding"])
+        result_item["embedding"] = parse_embedding_value(row["embedding"])
     if "metadata" in row and row["metadata"] is not None:
         result_item["metadata"] = parse_row_value(row["metadata"])
-    if "distance" in row:
+    if row.get("distance") is not None:
         result_item["distance"] = float(row["distance"])
     return result_item
 
@@ -267,7 +331,7 @@ def process_get_row(row: dict[str, Any], include_fields: dict[str, bool]) -> dic
         else None
     )
     embedding = (
-        parse_row_value(row["embedding"])
+        parse_embedding_value(row["embedding"])
         if (include_fields.get("embeddings") or include_fields.get("embedding")) and row.get("embedding") is not None
         else None
     )

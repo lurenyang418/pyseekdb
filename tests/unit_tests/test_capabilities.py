@@ -37,3 +37,10 @@ def test_capability_mixin_detects_seekdb_without_connection_duplication() -> Non
     assert version == Version("1.3.0.0")
     assert client.queries == ["connect", "SELECT version() as version"]
     assert client.backend_capabilities.supports_refresh_index
+
+
+def test_capability_mixin_exposes_database_fork_support() -> None:
+    class FakeClient(BackendCapabilitiesMixin):
+        _backend_capabilities = BackendCapabilities(backend="seekdb", version=Version("1.2.0"))
+
+    assert FakeClient().supports_fork_database

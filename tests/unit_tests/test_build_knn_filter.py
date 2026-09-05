@@ -33,7 +33,7 @@ class TestBuildKnnFilterNe:
         assert knn_expr["filter"] == [
             {
                 "bool": {
-                    "filter": [{"range": {"data_content.metadata.zpx_hint": {"gte": -9223372036854775808}}}],
+                    "filter": [{"exists": {"field": "_id"}}],
                     "must_not": [{"term": {"data_content.metadata.zpx_hint": 0}}],
                 }
             }

@@ -50,7 +50,7 @@ class BaseConnection(ABC):
         return False
 
     @abstractmethod
-    def _execute(self, sql: str) -> Any:
+    def _execute(self, sql: str, params: list[Any] | tuple[Any, ...] | None = None) -> Any:
         """Execute SQL statement (basic functionality)"""
         pass
 

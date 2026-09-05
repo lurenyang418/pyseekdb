@@ -1052,67 +1052,67 @@ class TestValidateRecordIds:
 
     def test_valid_single_id(self):
         """Test valid single id."""
-        from pyseekdb.client.client_base import _validate_record_ids
+        from pyseekdb.client.validators import _validate_record_ids
 
         _validate_record_ids(["doc_1"])
 
     def test_valid_multiple_ids(self):
         """Test valid multiple ids."""
-        from pyseekdb.client.client_base import _validate_record_ids
+        from pyseekdb.client.validators import _validate_record_ids
 
         _validate_record_ids(["id1", "id2", "id_3"])
 
     def test_valid_boundary_512_chars(self):
         """Test valid boundary 512 chars."""
-        from pyseekdb.client.client_base import _validate_record_ids
+        from pyseekdb.client.validators import _validate_record_ids
 
         _validate_record_ids(["a" * 512])
 
     def test_empty_id_raises(self):
         """Test empty id raises."""
-        from pyseekdb.client.client_base import _validate_record_ids
+        from pyseekdb.client.validators import _validate_record_ids
 
         with pytest.raises(ValueError, match="must not be empty"):
             _validate_record_ids([""])
 
     def test_non_string_id_raises(self):
         """Test non string id raises."""
-        from pyseekdb.client.client_base import _validate_record_ids
+        from pyseekdb.client.validators import _validate_record_ids
 
         with pytest.raises(TypeError, match="must be a string"):
             _validate_record_ids([123])
 
     def test_too_long_id_raises(self):
         """Test too long id raises."""
-        from pyseekdb.client.client_base import _validate_record_ids
+        from pyseekdb.client.validators import _validate_record_ids
 
         with pytest.raises(ValueError, match="too long"):
             _validate_record_ids(["a" * 513])
 
     def test_invalid_chars_raises(self):
         """Test invalid chars raises."""
-        from pyseekdb.client.client_base import _validate_record_ids
+        from pyseekdb.client.validators import _validate_record_ids
 
         with pytest.raises(ValueError, match="invalid characters"):
             _validate_record_ids(["doc-1"])
 
     def test_space_in_id_raises(self):
         """Test space in id raises."""
-        from pyseekdb.client.client_base import _validate_record_ids
+        from pyseekdb.client.validators import _validate_record_ids
 
         with pytest.raises(ValueError, match="invalid characters"):
             _validate_record_ids(["doc 1"])
 
     def test_mixed_valid_and_invalid_raises_on_first_bad(self):
         """Test mixed valid and invalid raises on first bad."""
-        from pyseekdb.client.client_base import _validate_record_ids
+        from pyseekdb.client.validators import _validate_record_ids
 
         with pytest.raises(ValueError, match="invalid characters"):
             _validate_record_ids(["good_id", "bad-id"])
 
     def test_non_list_ids_raises(self):
         """Test non list ids raises."""
-        from pyseekdb.client.client_base import _validate_record_ids
+        from pyseekdb.client.validators import _validate_record_ids
 
         with pytest.raises(TypeError, match="expected list\\[str\\]"):
             _validate_record_ids("doc_1")
@@ -1299,37 +1299,11 @@ class TestNamespaceCatalogs:
         assert any("WHERE collection_id = 'abc123'" in s for s in calls)
 
 
-class TestBrokenNsCollectionPurge:
-    """TestBrokenNsCollectionPurge class."""
+class TestBrokenNsCollectionRead:
+    """TestBrokenNsCollectionRead class."""
 
-    def test_purge_broken_ns_collection_if_incomplete_calls_delete(self):
-        """Test purge broken ns collection if incomplete calls delete."""
-        c = FakeClient()
-        meta = {
-            "collection_id": "cid1",
-            "collection_name": "coll",
-            "settings": {"use_namespace": True, "storage_mode": "sn"},
-        }
-        c._use_catalog_database = MagicMock()
-        c._ns_missing_physical_resources = MagicMock(return_value=["cid1_logic_data_table"])
-        c._delete_ns_collection_meta = MagicMock()
-
-        assert c._purge_broken_ns_collection_if_incomplete("coll", meta=meta) is True
-        c._delete_ns_collection_meta.assert_called_once_with("coll")
-
-    def test_purge_skips_complete_collection(self):
-        """Test purge skips complete collection."""
-        c = FakeClient()
-        meta = {"collection_id": "cid1", "collection_name": "coll", "settings": {"storage_mode": "sn"}}
-        c._use_catalog_database = MagicMock()
-        c._ns_missing_physical_resources = MagicMock(return_value=[])
-        c._delete_ns_collection_meta = MagicMock()
-
-        assert c._purge_broken_ns_collection_if_incomplete("coll", meta=meta) is False
-        c._delete_ns_collection_meta.assert_not_called()
-
-    def test_get_collection_purges_incomplete_namespace_collection(self):
-        """Test get collection purges incomplete namespace collection."""
+    def test_get_collection_reports_incomplete_without_deleting(self):
+        """A read must not purge an incomplete namespace collection."""
 
         class GetClient(FakeClient):
             """GetClient class."""
@@ -1343,12 +1317,13 @@ class TestBrokenNsCollectionPurge:
             "settings": {"use_namespace": True, "storage_mode": "sn", "dimension": 3},
         }
         c._get_ns_collection_meta = MagicMock(return_value=meta)
-        c._purge_broken_ns_collection_if_incomplete = MagicMock(return_value=True)
-        c._get_collection = MagicMock(side_effect=ValueError("Collection 'coll' does not exist"))
+        c._use_catalog_database = MagicMock()
+        c._ns_missing_physical_resources = MagicMock(return_value=["cid1_logic_data_table"])
+        c._delete_ns_collection_meta = MagicMock()
 
-        with pytest.raises(ValueError, match="does not exist"):
+        with pytest.raises(ValueError, match="not ready"):
             c.get_collection("coll")
-        c._purge_broken_ns_collection_if_incomplete.assert_called_once_with(collection_name="coll", meta=meta)
+        c._delete_ns_collection_meta.assert_not_called()
 
 
 class TestValidateNResults:

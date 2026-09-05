@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from .validators import _validate_n_results
+from .validators import _validate_n_results, _validate_pagination
 
 if TYPE_CHECKING:
     from .embedding_function import EmbeddingFunction
@@ -25,6 +25,7 @@ class AsyncCollection:
         distance: str | None = None,
         sparse_vector_index_config: SparseVectorIndexConfig | None = None,
         use_namespace: bool = False,
+        has_sparse_vector_index: bool = False,
         **metadata: Any,
     ) -> None:
         self._client = client
@@ -34,6 +35,7 @@ class AsyncCollection:
         self._embedding_function = embedding_function
         self._distance = distance
         self._sparse_vector_index_config = sparse_vector_index_config
+        self._has_sparse_vector_index = has_sparse_vector_index or sparse_vector_index_config is not None
         self._use_namespace = use_namespace
         self._metadata = metadata
 
@@ -73,6 +75,16 @@ class AsyncCollection:
         return self._distance
 
     @property
+    def sparse_vector_index_config(self) -> SparseVectorIndexConfig | None:
+        """Sparse vector index configuration, when available."""
+        return self._sparse_vector_index_config
+
+    @property
+    def has_sparse_vector_index(self) -> bool:
+        """Whether the collection contains a sparse vector index."""
+        return self._has_sparse_vector_index
+
+    @property
     def use_namespace(self) -> bool:
         """Whether this collection uses namespace storage."""
         return self._use_namespace
@@ -83,6 +95,15 @@ class AsyncCollection:
             raise NotImplementedError(
                 "Async namespace collection operations are not implemented yet; "
                 "use the synchronous Client for namespace collections."
+            )
+
+    def _guard_writable_collection(self) -> None:
+        """Reject writes whose sparse vector column cannot be maintained asynchronously."""
+        self._guard_standard_collection()
+        if self._has_sparse_vector_index:
+            raise NotImplementedError(
+                "Async writes to sparse vector collections are not implemented yet; "
+                "use the synchronous Client for add, update, and upsert operations."
             )
 
     def __repr__(self) -> str:
@@ -100,7 +121,7 @@ class AsyncCollection:
         **kwargs: Any,
     ) -> None:
         """Add records to the collection."""
-        self._guard_standard_collection()
+        self._guard_writable_collection()
         await self._client._collection_add(
             self,
             ids=ids,
@@ -119,7 +140,7 @@ class AsyncCollection:
         **kwargs: Any,
     ) -> None:
         """Update existing records."""
-        self._guard_standard_collection()
+        self._guard_writable_collection()
         await self._client._collection_update(
             self,
             ids=ids,
@@ -138,7 +159,7 @@ class AsyncCollection:
         **kwargs: Any,
     ) -> None:
         """Insert records or update records with matching IDs."""
-        self._guard_standard_collection()
+        self._guard_writable_collection()
         await self._client._collection_upsert(
             self,
             ids=ids,
@@ -206,6 +227,7 @@ class AsyncCollection:
     ) -> dict[str, Any]:
         """Retrieve records by IDs or filters."""
         self._guard_standard_collection()
+        _validate_pagination(limit, offset)
         return await self._client._collection_get(
             self,
             ids=ids,

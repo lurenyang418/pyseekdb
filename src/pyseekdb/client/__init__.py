@@ -2,6 +2,7 @@
 
 from .async_client import AsyncClient
 from .async_collection import AsyncCollection
+from .client import Client
 from .collection import Collection
 from .configuration import (
     BengProperties,
@@ -28,7 +29,6 @@ from .sparse_embedding_function import (
     SparseVector,
     register_sparse_embedding_function,
 )
-from .sync_client import Client
 from .types import K
 from .version import Version
 

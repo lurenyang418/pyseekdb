@@ -54,6 +54,8 @@ async def test_async_server_crud_query_concurrency_and_collection_fork() -> None
         assert client._pool is not None
         pool = client._pool
 
+        await collection.refresh_index()
+
         result = await collection.query(query_embeddings=[1.0, 0.0, 0.0], n_results=1)
         assert result["ids"][0] == ["one"]
 

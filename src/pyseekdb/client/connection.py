@@ -129,20 +129,26 @@ class MySQLConnectionMixin:
         description = getattr(cursor, "description", None)
         return description is not None or is_query_sql(sql)
 
-    def _execute(self, sql: str) -> Any:
+    def _execute(self, sql: str, params: list[Any] | tuple[Any, ...] | None = None) -> Any:
         """Execute a SQL statement and return rows for query statements."""
         if os.environ.get("PYSEEKDB_PRINT_SQL", "").lower() in ("1", "true", "yes"):
-            print(f"[pyseekdb SQL] {sql}", flush=True)
+            print(f"[pyseekdb SQL] {sql} -- params={params}", flush=True)
         conn = self._ensure_connection()
         try:
             if self._use_context_manager_for_cursor():
                 with conn.cursor() as cursor:
-                    cursor.execute(sql)
+                    if params is None:
+                        cursor.execute(sql)
+                    else:
+                        cursor.execute(sql, tuple(params))
                     return cursor.fetchall() if self._should_fetch_results(cursor, sql) else None
 
             cursor = conn.cursor()
             try:
-                cursor.execute(sql)
+                if params is None:
+                    cursor.execute(sql)
+                else:
+                    cursor.execute(sql, tuple(params))
                 return cursor.fetchall() if self._should_fetch_results(cursor, sql) else None
             finally:
                 cursor.close()
