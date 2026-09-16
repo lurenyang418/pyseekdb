@@ -55,7 +55,7 @@ def test_collection_upsert_supports_metadata_only() -> None:
 
     sql = client._execute.call_args.args[0]
     assert "embedding = NULL" not in sql
-    assert r"\"rank\"" in sql
+    assert client._execute.call_args.args[1] == ["one", None, '{"rank": 1}']
     assert "metadata =" in sql
     assert "ON DUPLICATE KEY UPDATE" in sql
 

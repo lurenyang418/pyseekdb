@@ -10,6 +10,7 @@ from typing import Any
 
 from pymysql.converters import escape_string
 
+from .collection_dml import build_collection_upsert_statement, prepare_collection_write_batch
 from .configuration import DEFAULT_DISTANCE_METRIC
 from .document_query_builder import (
     _pure_must_not_clauses as _pure_must_not_clauses_fragment,
@@ -40,9 +41,6 @@ from .query_builder import (
 )
 from .query_builder import (
     embedding_to_hexstring as _embedding_to_hexstring,
-)
-from .query_builder import (
-    normalize_collection_batch as _normalize_collection_batch_fragment,
 )
 from .query_builder import (
     normalize_include_fields as _normalize_include_fields_fragment,
@@ -185,8 +183,19 @@ class CollectionOperationsMixin:
         logger.debug(f"Adding data to collection '{collection_name}'")
 
         explicit_embeddings = embeddings is not None
-        ids, embeddings, metadatas, documents = _normalize_collection_batch_fragment(
-            ids, embeddings, metadatas, documents
+        batch = prepare_collection_write_batch(
+            ids,
+            embeddings,
+            metadatas,
+            documents,
+            operation="add",
+            embedding_function=embedding_function,
+        )
+        ids, embeddings, metadatas, documents = (
+            batch.ids,
+            batch.embeddings,
+            batch.metadatas,
+            batch.documents,
         )
 
         self._warn_explicit_embeddings_override_embedding_function(
@@ -195,43 +204,6 @@ class CollectionOperationsMixin:
             has_documents=bool(documents),
             embedding_function=embedding_function,
         )
-
-        # Handle vector generation logic:
-        # 1. If embeddings are provided, use them directly without embedding
-        # 2. If embeddings are not provided but documents are provided:
-        #    - If embedding_function is provided, use it to generate embeddings from documents
-        #    - If embedding_function is not provided, raise an error
-        # 3. If neither embeddings nor documents are provided, raise an error
-        # An omitted embedding function is normalized to None when the collection has an
-        # explicit dense dimension; documents without explicit embeddings still require an EF.
-
-        if embeddings:
-            # embeddings provided, use them directly without embedding
-            pass
-        elif documents:
-            # embeddings not provided but documents are provided, check for embedding_function
-            if embedding_function is not None:
-                logger.debug(f"Generating embeddings for {len(documents)} documents using embedding function")
-                try:
-                    embeddings = embedding_function(documents)
-                except Exception as e:
-                    logger.exception("Failed to generate embeddings")
-                    raise ValueError(f"Failed to generate embeddings from documents: {e}") from e
-            else:
-                raise ValueError(
-                    "Documents provided but no embeddings and no embedding function. "
-                    "Either:\n"
-                    "  1. Provide embeddings directly when calling add(), or\n"
-                    "  2. Provide embedding_function to auto-generate embeddings from documents."
-                )
-        else:
-            # Neither embeddings nor documents provided, raise an error
-            raise ValueError(
-                "Neither embeddings nor documents provided. "
-                "Please provide either:\n"
-                "  1. embeddings directly, or\n"
-                "  2. documents with embedding_function to generate embeddings."
-            )
 
         num_items = len(ids)
 
@@ -331,8 +303,19 @@ class CollectionOperationsMixin:
         logger.debug(f"Updating data in collection '{collection_name}'")
 
         explicit_embeddings = embeddings is not None
-        ids, embeddings, metadatas, documents = _normalize_collection_batch_fragment(
-            ids, embeddings, metadatas, documents
+        batch = prepare_collection_write_batch(
+            ids,
+            embeddings,
+            metadatas,
+            documents,
+            operation="update",
+            embedding_function=embedding_function,
+        )
+        ids, embeddings, metadatas, documents = (
+            batch.ids,
+            batch.embeddings,
+            batch.metadatas,
+            batch.documents,
         )
 
         self._warn_explicit_embeddings_override_embedding_function(
@@ -341,44 +324,6 @@ class CollectionOperationsMixin:
             has_documents=bool(documents),
             embedding_function=embedding_function,
         )
-
-        # Handle vector generation logic:
-        # 1. If embeddings are provided, use them directly without embedding
-        # 2. If embeddings are not provided but documents are provided:
-        #    - If embedding_function is provided, use it to generate embeddings from documents
-        #    - If embedding_function is not provided, raise an error
-        # 3. If neither embeddings nor documents are provided:
-        #    - If metadatas are provided, allow update (metadata-only update)
-        #    - If metadatas are not provided, raise an error
-
-        if embeddings:
-            # embeddings provided, use them directly without embedding
-            pass
-        elif documents:
-            # embeddings not provided but documents are provided, check for embedding_function
-            if embedding_function is not None:
-                logger.debug(f"Generating embeddings for {len(documents)} documents using embedding function")
-                try:
-                    embeddings = embedding_function(documents)
-                except Exception as e:
-                    logger.exception("Failed to generate embeddings")
-                    raise ValueError(f"Failed to generate embeddings from documents: {e}") from e
-            else:
-                raise ValueError(
-                    "Documents provided but no embeddings and no embedding function. "
-                    "Either:\n"
-                    "  1. Provide embeddings directly when calling update(), or\n"
-                    "  2. Provide embedding_function to auto-generate embeddings from documents."
-                )
-        elif not metadatas:
-            # Neither embeddings nor documents nor metadatas provided, raise an error
-            raise ValueError(
-                "Neither embeddings nor documents nor metadatas provided. "
-                "Please provide at least one of:\n"
-                "  1. embeddings directly, or\n"
-                "  2. documents with embedding_function to generate embeddings, or\n"
-                "  3. metadatas to update metadata only."
-            )
 
         # Get table name
         table_name = self._get_collection_table_name(collection_id, collection_name)
@@ -467,47 +412,20 @@ class CollectionOperationsMixin:
         """
         logger.debug(f"Upserting data in collection '{collection_name}'")
 
-        ids, embeddings, metadatas, documents = _normalize_collection_batch_fragment(
-            ids, embeddings, metadatas, documents
+        batch = prepare_collection_write_batch(
+            ids,
+            embeddings,
+            metadatas,
+            documents,
+            operation="upsert",
+            embedding_function=embedding_function,
         )
-
-        # Handle vector generation logic:
-        # 1. If embeddings are provided, use them directly without embedding
-        # 2. If embeddings are not provided but documents are provided:
-        #    - If embedding_function is provided, use it to generate embeddings from documents
-        #    - If embedding_function is not provided, raise an error
-        # 3. If neither embeddings nor documents are provided:
-        #    - If metadatas are provided, allow upsert (metadata-only upsert)
-        #    - If metadatas are not provided, raise an error
-
-        if embeddings:
-            # embeddings provided, use them directly without embedding
-            pass
-        elif documents:
-            # embeddings not provided but documents are provided, check for embedding_function
-            if embedding_function is not None:
-                logger.debug(f"Generating embeddings for {len(documents)} documents using embedding function")
-                try:
-                    embeddings = embedding_function(documents)
-                except Exception as e:
-                    logger.exception("Failed to generate embeddings")
-                    raise ValueError(f"Failed to generate embeddings from documents: {e}") from e
-            else:
-                raise ValueError(
-                    "Documents provided but no embeddings and no embedding function. "
-                    "Either:\n"
-                    "  1. Provide embeddings directly when calling upsert(), or\n"
-                    "  2. Provide embedding_function to auto-generate embeddings from documents."
-                )
-        elif not metadatas:
-            # Neither embeddings nor documents nor metadatas provided, raise an error
-            raise ValueError(
-                "Neither embeddings nor documents nor metadatas provided. "
-                "Please provide at least one of:\n"
-                "  1. embeddings directly, or\n"
-                "  2. documents with embedding_function to generate embeddings, or\n"
-                "  3. metadatas to update metadata only."
-            )
+        ids, embeddings, metadatas, documents = (
+            batch.ids,
+            batch.embeddings,
+            batch.metadatas,
+            batch.documents,
+        )
 
         # Get table name
         table_name = self._get_collection_table_name(collection_id, collection_name)
@@ -525,55 +443,19 @@ class CollectionOperationsMixin:
         # update assignments include only fields supplied by the caller, which
         # preserves the partial-update semantics without a read-before-write.
         for i in range(len(ids)):
-            id_val = ids[i]
-            if not isinstance(id_val, str):
-                id_val = str(id_val)
-            id_sql = self._convert_id_to_sql(id_val)
             doc_val = documents[i] if documents else None
             meta_val = metadatas[i] if metadatas else None
             vec_val = embeddings[i] if embeddings else None
-
-            doc_sql = "NULL"
-            if doc_val is not None:
-                doc_sql = f"'{escape_string(doc_val)}'"
-
-            meta_sql = "NULL"
-            if meta_val is not None:
-                meta_json = json.dumps(meta_val, ensure_ascii=False)
-                meta_sql = f"'{escape_string(meta_json)}'"
-
-            vec_sql = "NULL" if vec_val is None else _embedding_to_hexstring(vec_val)
-            columns = [
-                CollectionFieldNames.ID,
-                CollectionFieldNames.DOCUMENT,
-                CollectionFieldNames.METADATA,
-                CollectionFieldNames.EMBEDDING,
-            ]
-            values = [id_sql, doc_sql, meta_sql, vec_sql]
-            update_clauses = []
-
-            if doc_val is not None:
-                update_clauses.append(f"{CollectionFieldNames.DOCUMENT} = {doc_sql}")
-            if meta_val is not None:
-                update_clauses.append(f"{CollectionFieldNames.METADATA} = {meta_sql}")
-            if vec_val is not None:
-                update_clauses.append(f"{CollectionFieldNames.EMBEDDING} = {vec_sql}")
-
-            if sparse_embeddings and sparse_embeddings[i] is not None:
-                sparse_sql = _sparse_vector_to_sql(sparse_embeddings[i])
-                columns.append(CollectionFieldNames.SPARSE_EMBEDDING)
-                values.append(sparse_sql)
-                update_clauses.append(f"{CollectionFieldNames.SPARSE_EMBEDDING} = {sparse_sql}")
-
-            if not update_clauses:
-                update_clauses.append(f"{CollectionFieldNames.ID} = {CollectionFieldNames.ID}")
-
-            sql = (
-                f"INSERT INTO `{table_name}` ({', '.join(columns)}) VALUES ({', '.join(values)}) "
-                f"ON DUPLICATE KEY UPDATE {', '.join(update_clauses)}"
+            sql, params = build_collection_upsert_statement(
+                f"`{table_name}`",
+                ids[i],
+                doc_val,
+                vec_val,
+                meta_val,
+                sparse_embeddings[i] if sparse_embeddings is not None else None,
             )
             logger.debug("Executing SQL: %s", sql)
-            self._execute(sql)
+            self._execute(sql, params)
 
         logger.debug(f"✅ Successfully upserted {len(ids)} item(s) in collection '{collection_name}'")
 

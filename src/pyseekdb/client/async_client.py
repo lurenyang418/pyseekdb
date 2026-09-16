@@ -13,6 +13,7 @@ from typing import Any
 
 from .async_collection import AsyncCollection
 from .capabilities import BackendCapabilities, _first_result_value, parse_backend_identity
+from .collection_dml import build_collection_upsert_statement, prepare_collection_write_batch
 from .collection_lifecycle import (
     COLLECTION_CREATION_TOKEN_KEY,
     COLLECTION_STATE_CREATING,
@@ -38,7 +39,6 @@ from .query_builder import (
     build_where_clause,
     embed_texts,
     embedding_to_hexstring,
-    normalize_collection_batch,
     normalize_include_fields,
     normalize_query_embeddings,
     process_get_row,
@@ -636,27 +636,24 @@ class AsyncClient:
         documents: str | list[str] | None,
         **kwargs: Any,
     ) -> None:
-        id_list, embedding_list, metadata_list, document_list = normalize_collection_batch(
-            ids, embeddings, metadatas, documents, require_values=True
+        batch = prepare_collection_write_batch(
+            ids,
+            embeddings,
+            metadatas,
+            documents,
+            operation="add",
+            embedding_function=collection.embedding_function,
         )
-        if embedding_list is None and document_list is not None:
-            embedding_list = (
-                list(collection.embedding_function(document_list)) if collection.embedding_function else None
-            )
-            if embedding_list is None:
-                raise ValueError("Documents require an embedding function")
-        if embedding_list is None and document_list is None:
-            raise ValueError("Add requires embeddings or documents")
         table = _quote_sql_identifier(CollectionNames.table_name(collection.id))
         statements: list[tuple[str, list[Any]]] = []
-        for index, record_id in enumerate(id_list):
-            vector_sql = "NULL" if embedding_list is None else embedding_to_hexstring(embedding_list[index])
+        for index, record_id in enumerate(batch.ids):
+            vector_sql = "NULL" if batch.embeddings is None else embedding_to_hexstring(batch.embeddings[index])
             statements.append((
                 f"INSERT INTO {table} (_id, document, embedding, metadata) VALUES (CAST(%s AS BINARY), %s, {vector_sql}, %s)",
                 [
                     record_id,
-                    document_list[index] if document_list is not None else None,
-                    json.dumps(metadata_list[index], ensure_ascii=False) if metadata_list is not None else None,
+                    batch.documents[index] if batch.documents is not None else None,
+                    json.dumps(batch.metadatas[index], ensure_ascii=False) if batch.metadatas is not None else None,
                 ],
             ))
         await self._execute_transaction(statements)
@@ -670,28 +667,27 @@ class AsyncClient:
         documents: str | list[str] | None,
         **kwargs: Any,
     ) -> None:
-        id_list, embedding_list, metadata_list, document_list = normalize_collection_batch(
-            ids, embeddings, metadatas, documents, require_values=True
+        batch = prepare_collection_write_batch(
+            ids,
+            embeddings,
+            metadatas,
+            documents,
+            operation="update",
+            embedding_function=collection.embedding_function,
         )
-        if embedding_list is None and document_list is not None:
-            embedding_list = (
-                list(collection.embedding_function(document_list)) if collection.embedding_function else None
-            )
-            if embedding_list is None:
-                raise ValueError("Documents require an embedding function")
         table = _quote_sql_identifier(CollectionNames.table_name(collection.id))
         statements: list[tuple[str, list[Any]]] = []
-        for index, record_id in enumerate(id_list):
+        for index, record_id in enumerate(batch.ids):
             assignments: list[str] = []
             params: list[Any] = []
-            if document_list is not None:
+            if batch.documents is not None:
                 assignments.append("document = %s")
-                params.append(document_list[index])
-            if embedding_list is not None:
-                assignments.append(f"embedding = {embedding_to_hexstring(embedding_list[index])}")
-            if metadata_list is not None:
+                params.append(batch.documents[index])
+            if batch.embeddings is not None:
+                assignments.append(f"embedding = {embedding_to_hexstring(batch.embeddings[index])}")
+            if batch.metadatas is not None:
                 assignments.append("metadata = %s")
-                params.append(json.dumps(metadata_list[index], ensure_ascii=False))
+                params.append(json.dumps(batch.metadatas[index], ensure_ascii=False))
             statements.append((
                 f"UPDATE {table} SET {', '.join(assignments)} WHERE _id = CAST(%s AS BINARY)",
                 [*params, record_id],
@@ -699,41 +695,27 @@ class AsyncClient:
         await self._execute_transaction(statements)
 
     async def _collection_upsert(self, collection: AsyncCollection, **kwargs: Any) -> None:
-        ids, embeddings, metadatas, documents = normalize_collection_batch(
+        batch = prepare_collection_write_batch(
             kwargs.pop("ids"),
             kwargs.pop("embeddings"),
             kwargs.pop("metadatas"),
             kwargs.pop("documents"),
-            require_values=True,
+            operation="upsert",
+            embedding_function=collection.embedding_function,
         )
-        if embeddings is None and documents is not None:
-            if collection.embedding_function is None:
-                raise ValueError("Documents require an embedding function")
-            embeddings = list(collection.embedding_function(documents))
 
         table = _quote_sql_identifier(CollectionNames.table_name(collection.id))
         statements: list[tuple[str, list[Any]]] = []
-        for index, record_id in enumerate(ids):
-            embedding_sql = "NULL" if embeddings is None else embedding_to_hexstring(embeddings[index])
-            update_clauses: list[str] = []
-            if documents is not None:
-                update_clauses.append("document = VALUES(document)")
-            if embeddings is not None:
-                update_clauses.append("embedding = VALUES(embedding)")
-            if metadatas is not None:
-                update_clauses.append("metadata = VALUES(metadata)")
-            if not update_clauses:
-                update_clauses.append("_id = _id")
-            statements.append((
-                f"INSERT INTO {table} (_id, document, embedding, metadata) "
-                f"VALUES (CAST(%s AS BINARY), %s, {embedding_sql}, %s) "
-                f"ON DUPLICATE KEY UPDATE {', '.join(update_clauses)}",
-                [
+        for index, record_id in enumerate(batch.ids):
+            statements.append(
+                build_collection_upsert_statement(
+                    table,
                     record_id,
-                    documents[index] if documents is not None else None,
-                    json.dumps(metadatas[index], ensure_ascii=False) if metadatas is not None else None,
-                ],
-            ))
+                    batch.documents[index] if batch.documents is not None else None,
+                    batch.embeddings[index] if batch.embeddings is not None else None,
+                    batch.metadatas[index] if batch.metadatas is not None else None,
+                )
+            )
         await self._execute_transaction(statements)
 
     def _build_where(
